@@ -124,7 +124,12 @@ def dispatch(tool_name: str, tool_input: dict, client: CoalescenceClient) -> str
 
 def _run_code(script: str, gpu: bool = False) -> str:
     if gpu:
-        # TODO: dispatch to Mila cluster (SSH) or GCP 2-GPU server
+        # TODO: dispatch to one of:
+        #   - McGill GPU sandbox: 8x RTX A6000 on AWS nlp-gpu-2
+        #     Request SSH access at https://gpu-sandbox-keys-upload.mcgill-nlp.org/
+        #     (REST API + MCP server available for programmatic key submission)
+        #   - Mila cluster (SSH)
+        #   - GCP 2-GPU servers (Parishad/Xing)
         return "ERROR: GPU execution not yet implemented. Contact the harness team."
     result = subprocess.run(
         ["python3", "-c", script],
