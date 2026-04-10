@@ -1,0 +1,1029 @@
+﻿Meeting Logs
+April 9, 2026: Meeting with Laurent
+
+
+April 8, 2026: Pre-retreat sync
+Meeting attendees: Gaurav, Benno, Jay, Fengyuan, Ziling
+Goal: sync before the retreat
+
+
+We now have an initial version of the platform connected to agents. This meeting focused on what to improve in the platform, along with brainstorming ideas for each major component.
+
+
+Current Platform State
+At the moment:
+* The interaction score is based on the agreement rate between agents.
+* Agents can review papers and comment on reviews/posts.
+* Agents are assigned a qualitative rank.
+
+
+Platform features to add:
+* Add submols/subreddit
+* Qualitative rank (Platinum/Gold) -> rank in the leaderboard
+* Authors should be able to defend their points once reviews come.
+* Paper leaderboard.
+
+
+Aggregation scores for agents and papers:
+* How many upvotes/downvotes
+* How many posts they have commented
+* Long-horizon impact assigned to the past: ground it with respect to the real-world
+* [To Dos] Start with simple upvote/downvote; Then, we try aggregation of scores
+
+
+Current agent aggregation implementation :
+1. Review Quality(50 % weight)
+Asks: "Do other agents think your reviews are good?"
+  -  Takes the average score(upvotes minus downvotes) across all reviews you've written                                                                                                                    
+    - Normalizes via log scale to 0 - 100
+      - If your reviews average + 5 net votes → ~67. Average 0 → 50. Average - 3 → ~36.
+        - An agent who writes thoughtful reviews that get upvoted scores high here
+
+
+2. Consensus Alignment(30 % weight) — lines 37 - 69
+Asks: "Do your verdicts match what other reviewers find?"
+  - For each post you reviewed, looks at the majority verdict(most common among all reviewers)
+    - Counts how often your verdict matches the majority
+      - Returns a simple ratio: aligned / total(0.0 to 1.0)
+        - Multiplied by 100 before weighting in the final score
+          - BioVerify has 100 % because all their verdicts matched consensus
+
+
+3. Vote Karma(20 % weight) — lines 72 - 90
+Asks: "Is your content (posts + comments) well-received?"
+  - Sums the net vote scores on all your posts + all your comments
+    - Normalizes via log scale to 0 - 100
+      - This is the traditional Reddit - like signal — but only 20 % of the total
+
+
+
+
+Evaluation: 
+* Andrew Williams: paper impact/citations
+* Long-horizon grounding to the real world: if some ground-truth statistic becomes available a year later, how can we incorporate it into the system? One rough idea is to assign credit retroactively: if an agent’s prediction, such as predicted impact, turns out to be correct, we should upweight its score or influence.
+
+
+Agent Behavior and Participation Rules
+* Voting Should Require Effort: if an agent wants to vote, it should have read the paper, ideally it should also leave a review. Borrow stack exchange idea.
+* Possible Tool Integration: building tools to solve problems.
+
+
+
+
+Karma Design: 
+* Human Feedback vs Agent Feedback: The feedback should also tie it back to humans directly. But how? Rough ideas: Treat the human and agents feedback equally. 
+* Agents may learn to exploit loopholes in the scoring system. How can we reset? 
+
+
+Anonymity vs De-Anonymity in Review? This was discussed as an open design choice.
+* De-anonymous argument: people who have published strong papers in the past may be more likely to produce strong papers again. At minimum, known names may deserve more attention when new papers appear
+* Anonymous: anonymity helps reduce the “big-name effect”. it may encourage fairer evaluation of the work itself.
+→ possibly launch two versions, then analyze how reviewer and author behavior differs under anonymous vs non-anonymous settings.
+
+
+
+
+Adversarial Concerns:
+* Analysis: authors submit the papers with little changes to fool the agents.
+
+
+Action items:
+Take one aspect and present to the group on Friday; Define the RQs + tangible things
+Correlation metrics and datasets
+* # citations for ICLR 2025/2026
+Platform feature improvements
+* Add submols/subreddit
+* Qualitative rank (Platinum/Gold) -> rank in the leaderboard
+* Authors should be able to defend their points once reviews come.
+* Paper leaderboard.
+
+
+
+
+Meeting with Colin:
+Colin’s thought: 
+         LLMs have in many ways exacerbated problems with peer review, I think mainly because people are uploading the submission PDF and simply saying “write a review”. But there are things that I think reviewers ideally would do over the course of a peer review that they just realistically don’t have time for. Many of these things I think are extremely well-suited to current LLMs. For example:
+* Reviewers are expected to be fully knowledgeable about all relevant research and have enough familiarity will all related work to understand the novelty. This is unrealistic. But you could take each submission and each referenced paper and ask a thinking LLM “how similar are these papers and how much does the submission overlap”, etc. to better understand novelty.
+* Reviewers are also expected to know all relevant papers in case there are missing references. This also is unrealistic, but again an LLM could be queried in the same way as above against all unreferenced papers that turn up as similar according to some search engine.
+* Ideally reviewers would spend some time replicating the results of the submission in order to verify claims and ensure reproducibility. Of course this basically never happens. But I’m sure a coding agent could do this pretty reliably.
+* For theory papers, LLMs can verify steps of proofs. There is already evidence that they are at human or super-human level on this; see section 3.2 of https://arxiv.org/pdf/2602.03837
+All of the above would just give a human reviewer more information to make an informed decision. For example, if the reviewer had some sense of the submission’s novelty, and the LLM came back and said “I checked every referenced paper and every relevant paper I could find and indeed here’s the new stuff in the submission” then it would provide more reliability. Same for reproducibility etc
+
+
+* How can these agents inform human decisions?
+* Do agents know the impacts / usefulness of the ideas? Not realistic, not grounded.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+April 7, 2026: Meeting with Hugo
+
+
+Meeting with Hugo
+
+
+Automated reviewing could be a scalable solution. There is interest in connecting this to AI scientists and more broadly to the reviewing side of research workflows. This is something we could present later to Aaron and Gauthier, as they might be interested.
+
+
+Yann's paper reviewing proposal (website) might be interesting and could be something worth testing. We could also get good publicity/visibility for this.
+
+
+1. Objectives and goals for the review
+
+
+Instead of hard-coding too much structure, we may want to define a set of objectives, let the best way emerge through the interaction of agents and avoid injecting too much inductive bias from our side.
+
+
+2. Evidence-grounded reviewing
+
+
+Agents should be grounded in evidence. Reviews or claims should be supported by validated evidence and the communication (agent response) should happen more often with evidence rather than only through free-form opinions.
+
+
+It may be useful to let reviewers request more evidence such as research logs, code or other supporting artifacts so that reviewers have more signals. Similar idea can be thought of for agents as well.
+
+
+3. Elements from Yann's proposal
+
+
+Notion of review entity → mechanism for judging whether something is worth my time/token budget. This should be something agents should be configured to be more selective and where they should spend tokens and say certain other things like upvote and so on more wisely.
+
+
+4. Metrics and observability
+
+
+We need a simple way to track metrics. One possible design is that people get access to tokens (one behind the agent) and everything is recorded. However, this may become infeasible when third-party services are involved, as we can't record everything in this case.
+
+
+5. Agent identity and accountability
+
+
+Agents should likely have some form of identifiability. This identity could potentially be attached to one or more open review platforms.
+
+
+6. Skill dynamics and evolution of agents in the platform
+
+
+It may be important to track changes in agent skills over time even midway through deployment and study how these changes influence the overall reviewing system. A concern is that agents start to steer research directions toward more influential topics which could alter the ecosystem in unintended ways.
+
+
+7. Failure modes and recovery
+
+
+Q: when can the system go completely wrong? We need a way to reset and kick-start the agents again in this case. This should be something we need to study.
+
+
+8. Initialization and participation rules
+
+
+There should be more flexibility in how agents are initialized. Agents probably should not be allowed to upvote before they have contributed actual review effort.
+
+
+April 3, 2026: First group meeting
+Summary:
+* Met with collaborators and discussed the project from an engineering perspective.
+* Pre-retreat to-dos: engineer team builds a Moltbook-like platform; research team prepares curated evaluation datasets (past submissions, reviews, citations, engagement, before and after the knowledge cut-off date etc.).
+* Retreat focus: design a scoring function for identifying good papers; define agent roles/division of labor; analyze agent social behaviors; evaluate against real-world paper-quality signals.
+* Went through one round of comments from people; feel free to add more below.
+
+
+Meet the collaborators:
+Gaurav Sahu: 
+* ReviewerToo: predictive platform for paper acceptance/review — reviewertoo.org
+* Currently uses meta-review / AC scores as a sanity check
+* But human judgments are imperfect, so these scores should not be the sole supervision signal
+* Borderline accept/reject cases with reviewer disagreement are harder, but likely more interesting to study
+* Action: Ziling Cheng ask Gaurav whether he can share the ICLR datasets
+
+
+Kalpit Dixit: 
+Email: kalpit@paperlantern.ai
+Paper Lantern (paperlantern.ai) is a platform for building better search agents for scientific paper discovery. When hooked up with AutoResearch, it performs better. It is somewhat in the spirit of efforts like Sakana AI, aiming to help close the scientific discovery loop and optimize for metrics beyond incremental research, though right now it still kind of relies on human feedback.
+Action: Jay Gala to schedule a call with him about MCP stuff and how to engineer the platform.
+Pru Vatala: 
+
+
+Our platform engineer: what we want is something like a Moltbook—a Reddit-like platform where agents (similar to users) can post, comment, upvote, and downvote. Each agent and each paper would be associated with a score (i.e., karma).
+
+
+What is important for the platform: Modularity. The system should be modular, including components such as a scoring function (e.g., karma), direct agent launching, and MCP support.
+
+
+It should also be able to support 50–100 concurrent browser sessions, with a customizable commenting function: no comments, a single comment, or multiple comments. The platform should include the full stack: frontend, backend, and database. For the retreat, we only need to support around 50–200 agents.
+
+
+For the social component, we can start with a simplified assumption in which there is no social interaction. In this first setting, agents are not allowed to comment. Each agent independently submits its review as a post and cannot see other agents’ evaluations.
+The next setting introduces one round of social interaction per post. Under each post, the posting agent can receive at most one feedback comment and has at most one opportunity to revise its original paper review.
+From there, we can scale along these axes, increasing the amount and complexity of social interaction.
+
+
+Action: Jay Gala clarify everything with Pru Vatala
+
+
+
+
+Comments from people (feel free to add more!)
+
+
+Jay: 1) Upload papers biased toward pretraining data or trendy topics; unseen bias: what are these agents biased toward when evaluating seen papers? (--> analysis: important to study and evaluate the potential biases) 2) alphakiv (people enrichment): download the scraped data before the retreat.
+
+
+Kalpit: Can release MCPs for us to use during the retreat. We still need more clarity on which aspects of reviewing different agents should focus on, and what score scale they should use. This needs to be worked through, but having a reasonably good starting point before the retreat would already be valuable.
+
+
+Tom: Previously studied how to evaluate the impact of a paper, but found no true ground truth, only proxies. Practically, one axis is the correlation between agent judgments and citations. We also need to think about long-term effects and define karma based on those longer-term outcomes, with rewards that can change over time.
+
+
+Erfan: How do we convince people to bring their agents to the platform? Later, we agreed that this is more on the business side and likely out of scope for this project. For the retreat, we should focus on our own agents.
+
+
+Arkil: From a technical perspective: Assigning a score to a (review, paper) pair (review a review) and tying it to karma. For example, by using the last 10 years of ICLR papers (high-citation papers, papers rejected 3–4 times, etc.) and training reward models to score reviews jointly with papers.
+An important point is that scoring (review, paper) pairs should have some real-world grounding.
+
+
+Charbel: Think of the environment as a simulation environment: how do we find good papers? Mentioned the GEPA paper. How do we incentivize the best agent to search? How do agents improve themselves? This could also connect well to related work.
+
+
+Emiliano: Bias toward their own outputs / self-judgment. Bias toward their preferred topics. We should design incentives that encourage agents to discover rare gems.
+
+
+
+
+Project Proposal
+Goal:
+Identify “good” scientific papers from a pool using a democratic multi-agent evaluation platform. Lead to a leaderboard for papers and/or agents.
+
+
+Motivation: 
+* Evaluation bottleneck: scientific paper is scaling rapidly, but evaluation remains slow, noisy, and limited. A democratic multi-agent system enables scaling: 
+   * number of reviewers → reduces variance
+   * number of interactions → enables debate, defense, refinement
+* Closing the AutoResearch loop needs richer signals than purely performance-based.
+* Science is dialectical. Scientific judgment emerges through critique, rebuttal, and iteration—not one-shot scoring.
+* Opportunity for meta-analysis of (human) reviewing: what actually defines a “good” paper?
+
+
+Core research question: 
+* How can we reliably identify “good” scientific papers using democratic multi-agent evaluation?
+Key Idea
+Move beyond the standard “3 reviewers → 1 score each” paradigm.
+Instead, model evaluation as a democratic multi-agent evaluation + social engineering:
+* multiple evaluation axes (e.g., novelty, rigor, reproducibility, verification)
+* many heterogeneous reviewers (agents w/ different interests/personalities)
+* iterative critique and rebuttal
+* a leaderboard of papers + agents
+Rationale: human reviewing is noisy at small scale and with limited bandwidth; multi-agent systems can amortize bias across reviewers, axes, and interactions.
+Outcome
+* A leaderboard of papers derived from multi-agent evaluation
+* A ranking of agents based on alignment with real-world signals
+* Insights into:
+   * what makes a paper “good”
+   * how evaluation systems can be scaled and improved
+Methodology
+High-level picture:
+Key components: 
+* The platform
+* The agents interacting on it
+* The output: a leaderboard of top-k papers 
+Platform: a Moltbook-style platform
+* post reviews
+* read other posts / comments
+* comment on reviews
+* upvote / downvote
+* earn karma
+Agents
+* Agents are instantiated via a Cartesian product of:
+   * Evaluation roles (novelty (search), scientific rigors , reproducibility (gpu), ethics, etc.)
+   * Research interests (to reduce topical bias)
+      * Lit review?
+   * Personas / preferences
+   * Agent scaffolding: memory? Hardcoded - context compression. E.g., memory of past posts and interactions -> effect of judgement; reproducibility agent with access to GPUs?
+        Goal: increase diversity → improve calibration 
+* Self-improvement loop: 
+      * Agents adapt behavior based on karma feedback
+      * Hypothesis: optimizing karma → aligns with identifying “good” papers
+* With access to GPU (for reproducibility for example).
+* Create harness version (can start with a prompted one)
+Simulation
+* Preparation: 
+   * Instantiate agents with the cartesian products
+   * Initialize a pool of ≥1000 (anonymous) papers.
+* Initialization:
+   * Initially, each agent is prompted to select and evaluate a paper aligned with its interests from the pool.
+* Interaction Loop: Agents act autonomously with actions such as: post a review / comment on reviews/ view posts/comments / upvote / downvote, where agents have access to search, tool use, and execution etc. And we run the simulation for a fixed horizon.
+* Output: 
+   * Aggregate all reviews/interactions
+   * Produce a leaderboard of top-k papers
+   * Optionally a leaderboard of top-k agents
+Evaluation:
+Assess how well the leaderboard aligns with ground truth notions of paper quality.
+
+
+Things to narrow down (To-dos during retreat):
+Evaluation: 
+Notion of “good” papers and assess how well the leaderboard aligns with ground truth notions of paper quality
+Q1: What are some ground truth signals of a good paper?
+* Citations
+* Github stars
+* paper review scores / meta-reviews
+* engagement (e.g., AlphaXiv likes/interactions)
+
+
+Q2: What are some types of evaluations to consider to assess how good the system is doing?
+Short-term (offline / proxy ground truth)
+* Conference datasets (e.g., ICLR)
+* TMLR reviews
+* AlphaXiv:
+   * scrape weekly data
+   * track engagement over time
+* Held-out datasets
+Long-term (online / real-world)
+* Track future submissions (e.g., ICLR 2026)
+* Evaluate predictive validity over time
+
+
+Karma design:
+* Q1: How to design karma scores such that they encourage the models to find good papers?
+* Q2: (Key challenge) How can we avoid reward hacking?
+
+
+        Some rough ideas:
+* Should incentivize identifying high-quality papers while reflecting the deployment setting (no access to future ground truth) -> base karma on social signals (e.g., upvotes, interaction quality)
+* Credit assignment from the future to the past to reduce agent hallucinations.
+
+
+Paper review aggregation: 
+Q: How to aggregate all reviews/comments for a paper into a final score? 
+Possible design:
+* weighted aggregation of agent scores
+* weights = agent karma (proxy for reliability)
+* introduce an AC-style agent for meta-aggregation
+
+
+Engineering: 
+1. Agent workflow:
+* Memory, search, tool calls, access to GPUs, 
+* Action space (hierarchical)
+   * Post
+   * Comment
+   * View
+   * Thumbs up / down
+* Tool calls/search/access to resources etc.
+* Env: Moltbook
+2. Environment (Moltbook):
+* Full-stack system (frontend + backend + database)
+* need to support parallel simulation sessions
+
+
+Analysis:
+* Agent memory: what should be stored and updated over time?
+* Bias analysis
+   * pretraining bias
+   * recency bias
+   * own-output bias
+   * trendy topic bias
+   * “big name” bias
+* Interaction dynamics / social side: how do agents interact? Do they collaborate, do they offer different opinions, and how much influence do they have on each other?
+* Outcome analysis: do they converge to the same topics or papers? Which agents best predict real-world outcomes? What strategies are used?
+* Optimization behavior: how agents adapt to maximize karma (self-improvement loops)?
+* Hallucinations, especially when # interactions go up.
+Concerns & Risks
+* Echo chambers
+   * convergence toward mainstream ideas / popular topics
+* Over-reliance on proxy ground truth
+   * e.g., citations as a flawed signal
+* System gaming
+   * coordinated agents / social manipulation
+* Other unforeseeable dynamics or risks
+Potential Methods
+* adversarial agents (simulate social engineering)[a][b]
+* detect and analyze emergent gaming behaviors
+
+
+On Role of Humans on the platform (up for d[c]iscussion):
+Humans as oversight
+* Humans curate/moderate but don't post or review directly
+* They flag problematic content, set community guidelines, define which domains matter
+* The platform stays agent-native, humans are the governance layer
+Humans as participants
+* Humans can also post papers and review agent work
+* Creates a mixed ecosystem where human expert reviews carry different (higher?) weight
+* Con: It can get messy – do humans and agents compete on the same karma leaderboard, besides, we don’t have a clear incentive for humans to participate?
+Humans as consumers
+* The current model, but with better tooling: dashboards, alerts, export
+* "Show me all papers where agents disagree" or "alert me when a Platinum agent challenges a finding in my domain"
+* Humans use MolBook as an intelligence layer, not a social platform
+Humans as orchestrators
+* Humans assign verification tasks to agents: "I need 5 agents to review this paper"
+* Bounty system — humans post papers they want verified, agents compete to review
+* The human defines what needs verification, agents do the work
+
+
+
+
+Program Structure
+
+
+Retreat Schedule
+
+
+Day 0 (April 9, Thursday): 
+Goal: arrival and rest
+* Arrive
+* Settle in
+* Rest / informal social time
+Paper leaderboard?
+Interaction?
+Agent set up more for harness?
+
+
+Day 1 (April 10, Friday):
+Main goal: align on the project and make concrete progress on both the engineering and research sides
+Social: fire in the evening + board games
+
+
+Morning session (10:00 AM – 12:00 PM)
+1. Opening session
+* Introductions
+* Project overview: what the project is, what we already have, and what the goals are
+* Overview of the 3-day plan and expected outcomes
+* One person  
+2. Brainstorm + technical design walkthrough
+* Shared discussion of the platform, agent workflow, scoring, and evaluation
+* Walkthrough of the current codebase / infrastructure
+3. Team breakdown
+
+
+Engineering / Platform team (Gaurav)
+* Get familiar with the codebase and current platform
+* Identify what already works and what needs to be added or changed
+* Start implementing core platform changes
+* Some features to add from the meeting on April 8
+      * Add submols/subreddit
+      * Qualitative rank (Platinum/Gold) -> rank in the leaderboard
+      * Authors should be able to defend their points once reviews come.
+      * Paper leaderboard. 
+
+
+Karma / Scoring team + Agent interaction team:
+* What kind of interactions do we allow between agents? 
+* Brainstorm and formalize candidate scoring mechanisms
+* Focus on scores that could support agent self-improvement without obvious reward hacking
+* Define at least one simple baseline karma design
+Review Aggregation
+* Design how to aggregate agent feedback into paper-level scores
+* Prototype at least one baseline aggregation strategy
+
+
+
+
+Agent Initialization team (Benno) + Agent Workflow team 
+* Design the agent loop and action space
+* Clarify memory, tool use, search, and action logic
+* Begin implementation
+* (keep up-to-date with Agent Initialization Team)
+
+
+* Enumerate dimensions for initialization:
+   * research interests
+   * research values
+   * personas
+   * scaffolding/harness/GPU access
+   * evaluation axes
+* Build a first-pass Cartesian-product-based initialization scheme
+
+
+Afternoon session (1:30 PM - 5PM)
+* Work sessions (1:30PM - 5PM) based on teams
+* Closing session (5PM - 5:30PM): Each team gives:
+* a short oral update
+* a short written summary:
+   * what was done
+   * blockers
+   * plan for Day 2
+Evening:
+* Social time around the fire + board games
+
+
+Day 2 (April 11, Saturday)
+Main goal: assemble the components from Day 1, deploy an initial end-to-end system, and run a first simulation
+Social: hiking in the afternoon!
+
+
+Morning session (10AM - 12PM):[d]
+* Opening session (10 - 10:30AM): Decide how to assemble components into one system, assign integration responsibilities.
+* Work session (10:30AM - 12PM) based on teams
+* Team breakdown:
+
+
+Integration / Simulation team [engineer]
+* Assemble the system end to end
+* Launch an initial simulation run
+
+
+
+
+Agent Observation team [agent init team] + Analysis team
+* Monitor early agent behavior and interaction patterns
+* Check whether the action loop is working as intended
+* Propose and run first-pass analyses:
+   * biases
+   * interaction patterns
+   * basic behavioral diagnostics
+   * Adversarial to fool the agents
+
+
+Evaluation team
+* Evaluate the produced leaderboard / outputs
+* Start comparing outputs against available proxy signals
+* Define candidate notions of “good paper”
+* Identify datasets / metrics / offline evaluation setup
+* Clarify what can realistically be evaluated during the retreat
+
+
+Afternoon session (7PM - 8PM): 
+* Work session (1PM - 3:30PM): Continue the above.
+* Closing session (3:30 - 4PM): Each team gives a short oral update, a short written summary, concrete goals for Day 3 
+Late afternoon: Hiking (4-7PM)[e]
+Day 3 (April 12, Sunday)
+Main goal: understand the behavior of the initial vanilla system, both in terms of prediction quality and interaction dynamics
+
+
+Morning session: (10AM - 12PM)
+Focus:
+* inspect results from the initial system
+* evaluate prediction quality against proxy ground truth
+* analyze interaction dynamics
+* Have concrete to-dos / skeleton of work after retreat
+Suggested workstreams:
+* Evaluation: how good is the leaderboard?
+* Behavior analysis: what are agents actually doing?
+* Bias analysis: do we see obvious biases?
+* System diagnosis: where is the main bottleneck? 
+Afternoon session: (1:30PM - 2:30PM)[f][g]
+Closing session + brainstorming of todos after the retreat (1:30 PM - 3PM)
+Resources
+HuggingFace Workplace: to host datasets.
+
+
+McGill-NLP/AI-For-Science-Retreat.
+This is a private repo, you need to be a member of the McGill-NLP organization. Let Ziling Cheng know if you are not a member yet.
+
+
+
+
+Logistics:
+Food management: https://docs.google.com/spreadsheets/d/1pGsmZXoxpyB4V2-s2JQ5WZblQiEVKUPbLB22xFkbfcw/edit?gid=0#gid=0
+
+
+Transportation management:
+
+
+
+
+Team: Agent Creation
+Resources
+https://github.com/McGill-NLP/creating-agents
+
+
+Agent scaffold: https://github.com/OpenHands/OpenHands
+
+
+Initial prompts for some personas: 
+https://huggingface.co/spaces/McGill-NLP/AI-For-Science-Retreat/tree/main
+Day 1
+Comments from the crowd:
+* Paper from Gaurav on AI in peer review → “ReviewerToo: Should AI Join The Program Committee? A Look At The Future of Peer Review”: https://arxiv.org/abs/2510.08867her 
+* Martin: Machine Learning literature search api (made by martin, happy to support it): https://lacuna.tiptreesystems.com/docs#/read/fastapi_search_api_v1_search_get
+* Martin: Instruction-tuned LMs are bad at providing numerical scores, base models are much better.
+* Arkil: we need a log of what led to this review (prompt, context, etc.). To trace biases and errors this is needed. (Ask engineering team to add a metadata field when submitting the review?)
+* Agent init persona prompts: https://huggingface.co/spaces/McGill-NLP/AI-For-Science-Retreat/tree/main
+* Arkil: Meta-reviewing agents? Karma-earning user-submitted agents whose sole purpose is to look at reviews and critically analyse them? – Figure out intersection with the scoring/karma team.
+
+
+Agents are instantiated via a Cartesian product of:
+* Evaluation roles (novelty (search), scientific rigors , reproducibility (gpu), ethics, etc.)
+* Research interests (to reduce topical bias)
+   * Lit review?
+* Personas / preferences
+* Agent scaffolding: memory? Hardcoded - context compression. E.g., memory of past posts and interactions -> effect of judgement; reproducibility agent with access to GPUs?
+Independent meta-agent that acts as meta-reviewer/finding issues in interactions/posts?
+
+
+Team 1: AGGREGATOR
+Kush, Shubham
+Write rules
+E.g. down vote things that turn out wrong
+Read paper fully before voting or reviewing
+
+
+Team 2-5: all the 4 factors above
+
+
+Evaluation Roles: Verna, Arkil, Parishad
+
+
+Personas: Mehar, Charbel
+
+
+(see for some ideas: https://huggingface.co/spaces/McGill-NLP/AI-For-Science-Retreat/tree/main )
+
+
+Typical personas: optimistic vs pessimistic, agreeable vs disagreeable
+Suggestion: old-school reviewer (follows structure of reviews at conferences; formal academic lingo) vs. more modern twitter/reddit-style open-ended style of writing
+
+
+Social vs. lone wolf persona: social tends to comment more on other existing reviews, loves long discussions; lone wolf likes to independently write their own review and move on
+
+
+Research interests[h]: Marzia, Marco
+
+
+Scaffolding/Harness: 
+Parishad/Xing → figure out GPU access (Hyperscaling)
+Kush
+Wietze
+Marco
+Evaluation roles
+ACL 2023 Reviewing Instructions
+
+
+What is this paper about?
+The summary of a paper should be just that: a neutral, dispassionate summary of the research question and findings/contributions. We would help the program chairs the most by not tainting these summaries with, e.g., suggestions that the topic is exciting or a waste of time.
+
+
+Make sure you acknowledge all the contributions that you believe the paper is making: experimental evidence, replication, framing of a new question, artifacts that can be used in future work (models, resources, code), literature review, establishing new cross-disciplinary connections, conceptual developments, theoretical arguments. A paper may make several contributions, and not all of them need to be equally strong. You should state in your own words what you see as contributions of the paper, rather than copy/paste it from the abstract. This helps the authors and the chairs to see that you understood the gist of the paper, and hence the rest of your review should be taken seriously.
+
+
+Reasons to accept
+Even if you fundamentally disagree with something in the paper, it is important for the program chairs (and the mental health of the authors) that you accurately state all the best aspects of it. It also helps them to see that you actually understand the work, and hence any criticisms should be taken seriously.
+
+
+The contributions of the paper are the obvious candidates for the “reasons to accept”. They may come in many different forms and should be recognized, even if they are not the type of contribution that you aim for in your own work. ACL CFP explicitly welcomes the following kinds of contributions: an engineering solution, a literature review, a useful artifact (a model, software, a resource), reproduction of prior results, analysis (of models or data), theory, argumentation/position.
+
+
+In assessing a contribution, performance improvements or complex math are by themselves neither necessary nor sufficient. It should be clear in what way the study advances the field: what did we learn from it that we did not know before? What can we do that we could not do before? Are the research claims clearly articulated and sufficiently backed up by the appropriate evidence, literature or theory/arguments?
+
+
+If one of the strengths is the performance of the proposed system, do check that the baseline is sufficiently strong and well-tuned, and that the result is robust (e.g., not just the best of an unknown number of runs with unknown standard deviation between runs). Ideally, the computation budget should be reported. If you cannot find something in the paper, see if the responsible NLP checklist contains any answers or pointers to the paper or supplementary materials.
+
+
+Apart from the contributions of the paper, its strengths may be in e.g. being clear and well-written, in formulating a timely/important question, in proposing a better framing of a problem, showing previously ignored connections between ideas/fields, a conceptual development, etc.
+
+
+Reasons to reject
+Many things could go wrong in a study. Although reviewers often disagree about acceptance recommendations for papers above a certain quality threshold, the NeurIPS experiment showed that low-quality papers are identified quite reliably. There may be claims that are not actually supported by the evidence or by the arguments, but that are presented as conclusions rather than as hypotheses/discussion. The framing may be misleading. There may be obvious methodological flaws (e.g., only the best run results are reported), errors in the proofs, in the implementation, or in the analysis. There may be insufficient detail to understand what was done or how to reproduce the method and the results. There may be a lack of clarity about what the research question is (even if it is “Does system A work better than system B”?), what was done, why, and what was the conclusion. The paper should also make it clear in what way the findings and/or the released artifacts advance the field.
+
+
+At the same time, there are many complaints about reviews at previous conferences that cite as weaknesses things that are not in fact weaknesses, but rather belong in the “suggestions” box. Once you have the first draft of your review, you will need to revisit it to check for these frequent issues.
+
+
+Every work has limitations, and ACL 2023 submissions include a mandatory section for discussing that. Please take care to not penalize the authors for seriously thinking through the limitations of their work, in ethical or any other aspect. First, this information is crucial for future work. Second, if we as a community reward focusing only on positive aspects of research, this contributes to the over-hyping problem which damages the credibility of the whole field.
+
+
+Questions for the Author(s)
+Do you have major questions for the authors - especially if their answers would be relevant for your recommendation? Please note that the authors will have limited space to answer, and this section should be reserved for the “big” questions - not things like typos or non-critical missing references.
+
+
+Please use the letter numbering scheme for your questions, e.g.
+
+
+Question A:
+Question B:
+Question C:
+Combined with your reviewer number, this will make it easy to refer to your questions in rebuttal and reviewer discussion (e.g. question 2A = question A of reviewer 2).
+
+
+Missing References
+Please list any references that should be included in the bibliography or need to be discussed in more depth. If you mentioned missing previous work or lack of baselines, give the full citation. In particular, if you say that the submission lacks novelty, please be sure to include the specific work that you believe to be similar.
+
+
+Typos, Grammar, Style, and Presentation Improvements
+While the other fields are written for the chairs, this field is exclusively a message to the authors. This is the place for presentation suggestions, clarifications, pointing out (a reasonable amount of) typos or language errors: the small things that you do not consider “weaknesses” and should not distract the chairs from your overall assessment. Of course, if you find the paper completely illegible or unclear, such issues can escalate to the “weakness” list for the chairs.
+
+
+Things could be unclear because it is generally not easy to communicate clearly and effectively with a wide audience—especially when you have been working on a project for a long time and it all seems obvious to yourself, but not to others. Reviewers are the beta-readers, who can help the authors to significantly improve their papers. If you see something that they could do to increase the potential impact of their work, it is professional courtesy to let them know. Some examples include figures that are hard to read or interpret, the points that require extra background reading, ambiguity, and non-obvious connections between sections. If you have comments or questions that you would like the authors to respond to (beyond “thanks, we’ll fix this”), please move them to the “questions for the authors” and include them in the letter-numbered questions.
+
+
+Be careful in suggesting citations of your own papers. When you have truly relevant related work, this is appropriate, but it is also potentially de-anonymizing (especially when the paper in question is not very well-known). One workaround is to suggest several citations, including yours.
+
+
+Reproducibility, Ethics Review, Anonymity Requirement and Overall Recommendation
+The most important part of the review is your thorough comments. However, what many people focus on are numbers, particularly the “overall recommendation”. Thus, it would be remiss for our advice to overlook this part of the process.
+
+
+ACL 2023 is trying something new this year. We are splitting this decision into two parts: how sound the paper is and how exciting you find the paper.
+
+
+Soundness goes to how well the paper clearly states its claims and backs up them with evidence and argumentation. We want all papers to clear a minimum bar for presenting solid, thorough, technically sound research. We suspect that this will have lower variance than the other key metric, excitement. Please work with your fellow reviewers to come to a consensus: what are the claims of the paper and do you believe them?
+
+
+Excitement captures the more subjective evaluations of the novelty/significance of the contributions, and their potential interesting-ness to the community. Because not everyone will calibrate their scores the same way (this will depend on the batch of papers you get, your research area, and the direction you think the field should go), make sure that your scores are justified in the text of the review.
+
+
+The AC should be able to understand your justification of both scores to create a consensus score from all of the reviews. Please try to disentangle these two aspects in your review: e.g. even if you find a paper boring, it could still be sound and thorough.
+
+
+Reproducibility
+
+
+As you assess the reproducibility of the paper, think about not just whether the raw information to reproduce the paper are included. Also think about how easy it would be to reproduce the paper: imagine you had to tell someone who had a strong CS or Linguistics background but was not immersed in the field how to reproduce the paper in an e-mail. Could you just hand them the submission? If not, how long would the e-mail be to fill in the gaps?
+
+
+Confidence
+
+
+If your confidence is low, please use the confidential comments section at the end of the form to let your meta-reviewer know which aspects of your review might not be reliable.
+
+
+The review form also allows you to flag the paper for potential breaches of ACL’s anonymity period, or indicate that you know the authors’ identity from some source.
+
+
+
+
+
+
+
+
+ICML Main Track Reviewer Form Instructions
+Summary
+1. Briefly summarize the paper (including the main findings, main results, main algorithmic/conceptual ideas, etc. that the paper claims to contribute). This summary should not be used to critique the paper. A well-written summary should not be disputed by the authors of the paper or other readers.
+Claims and Evidence
+1. Are the claims made in the submission supported by clear and convincing evidence? If not, which claims are problematic and why?
+2. Do proposed methods and/or evaluation criteria (e.g., benchmark datasets) make sense for the problem or application at hand?
+3. Did you check the correctness of any proofs for theoretical claims? Please specify which ones, and discuss any issues.
+4. Did you check the soundness/validity of any experimental designs or analyses? Please specify which ones, and discuss any issues.
+5. Did you review the supplementary material? Which parts?
+Relation to Prior Works
+1. How are the key contributions of the paper related to the broader scientific literature? Be specific in terms of prior related findings/results/ideas/etc.
+2. Are there related works that are essential to understanding the (context for) key contributions of the paper, but are not currently cited/discussed in the paper? Be specific in terms of prior related findings/results/ideas/etc. (Example: “The key contribution is a linear-time algorithm, and only cites a quadratic-time algorithm for the same problem as prior work, but there was also an O(n log n) time algorithm for this problem discovered last year, namely Algorithm 3 from [ABC’24] published in ICML 2024.”)
+3. How well-versed are you with the literature related to this paper? (Examples: “I keep up with the literature in this area.”; “I am only familiar with a few key papers in this area, namely [ABC’02], [DEF’04], and [GHI’05].”) Note: Your response to this item will not be visible to authors. Please also see instructions regarding concurrent work.
+Other Aspects
+1. Enter any comments on other strengths and weaknesses of the paper, such as those concerning originality, significance, and clarity. We encourage you to be open-minded in terms of potential strengths. For example, originality may arise from creative combinations of existing ideas, removing restrictive assumptions from prior theoretical results, or application to a real-world use case (particularly for application-driven ML papers, indicated in the flag above and described in the Reviewer Instructions).
+2. If you have any other comments or suggestions (e.g., a list of typos), please write them here.
+Questions for Authors
+1. If you have any important questions for the authors, please carefully formulate them here. Please reserve your questions for cases where the response would likely change your evaluation of the paper, clarify a point in the paper that you found confusing, or address a critical limitation you identified. Please number your questions so authors can easily refer to them in the response, and explain how possible responses would change your evaluation of the paper.
+Ethical Issues
+1. If you believe there are ethical issues with this paper, please flag the paper for an ethics review. For guidance on when this is appropriate, please review the ethics guidelines.
+2. If you flagged this paper for ethics review, what area of expertise would it be most useful for the ethics reviewer to have? Please click all that apply:
+   1. Discrimination / Bias / Fairness Concerns
+   2. Inappropriate Potential Applications & Impact  (e.g., human rights concerns)
+   3. Privacy and Security
+   4. Legal Compliance (e.g., GDPR, copyright, terms of use)
+   5. Research Integrity Issues (e.g., plagiarism)
+   6. Responsible Research Practice (e.g., IRB, documentation, research ethics)
+   7. Other
+3. If you flagged this paper for an ethics review, please explain your concerns in detail.
+Code of Conduct Acknowledgement
+1. Please affirm the following: While performing my duties as a reviewer (including writing reviews and participating in discussions), I have and will continue to abide by the ICML code of conduct.
+Overall Recommendation
+1. Indicate an overall recommendation:
+   * 5. Strong accept
+   * 4. Accept
+   * 3. Weak accept (i.e., leaning towards accept, but could also be rejected)
+   * 2. Weak reject (i.e., leaning towards reject, but could also be accepted)
+   * 1. Reject
+
+
+ICLR 2026 Reviewing Guidelines
+
+
+Summarized in one sentence, a review aims to determine whether a submission will bring sufficient value to the community and contribute new knowledge. The process can be broken down into the following main reviewer tasks: 
+1. Read the paper: It’s important to carefully read through the entire paper and to look up any related work and citations that will help you comprehensively evaluate it. Be sure to give yourself sufficient time for this step.
+2. While reading, consider the following:
+   1. Objective of the work: What is the goal of the paper? Is it to better address a known application or problem, draw attention to a new application or problem, or to introduce and/or explain a new theoretical finding? A combination of these? Different objectives will require different considerations as to potential value and impact.
+   2. Strong points: is the submission clear, technically correct, experimentally rigorous, reproducible, does it present novel findings (e.g. theoretically, algorithmically, etc.)?
+   3. Weak points: is it weak in any of the aspects listed in b.?
+   4. Be mindful of potential biases and try to be open-minded about the value and interest a paper can hold for the entire ICLR community, even if it may not be very interesting for you.
+3. Answer four key questions for yourself to make a recommendation to Accept or Reject: 
+   1. What is the specific question and/or problem tackled by the paper?
+   2. Is the approach well motivated, including being well-placed in the literature?
+   3. Does the paper support the claims? This includes determining if results, whether theoretical or empirical, are correct and if they are scientifically rigorous.
+   4. What is the significance of the work? Does it contribute new knowledge and sufficient value to the community? Note, this does not necessarily require state-of-the-art results. Submissions bring value to the ICLR community when they convincingly demonstrate new, relevant, impactful knowledge (incl., empirical, theoretical, for practitioners, etc).
+4. Write and submit your initial review, organizing it as follows: 
+   1. Summarize what the paper claims to contribute. Be positive and constructive.
+   2. List strong and weak points of the paper. Be as comprehensive as possible.
+   3. Clearly state your initial recommendation (accept or reject) with one or two key reasons for this choice.
+   4. Provide supporting arguments for your recommendation.
+   5. Ask questions you would like answered by the authors to help you clarify your understanding of the paper and provide the additional evidence you need to be confident in your assessment. 
+   6. Provide additional feedback with the aim to improve the paper. Make it clear that these points are here to help, and not necessarily part of your decision assessment.
+5. Complete the CoE report: ICLR has adopted the following Code of Ethics (CoE). When submitting your review, you’ll be asked to complete a CoE report for the paper. The report is a simple form with two questions. The first asks whether there is a potential violation of the CoE. The second is relevant only if there is a potential violation and asks the reviewer to explain why there may be a potential violation. In order to answer these questions, it is therefore important that you read the CoE before starting your reviews.
+
+
+NeurIPS Review form
+
+
+Below is a description of the questions you will be asked on the review form for each paper and some guidelines on what to consider when answering these questions. Feel free to use the NeurIPS paper checklist included in each paper as a tool when preparing your review. Remember that answering “no” to some questions is typically not grounds for rejection. When writing your review, please keep in mind that after decisions have been made, reviews and meta-reviews of accepted papers and opted-in rejected papers will be made public.
+1. Summary: Briefly summarize the paper and its contributions. This is not the place to critique the paper; the authors should generally agree with a well-written summary. This is also not the place to paste the abstract—please provide the summary in your own understanding after reading.
+2. Strengths and Weaknesses: Please provide a thorough assessment of the strengths and weaknesses of the paper. A good mental framing for strengths and weaknesses is to think of reasons you might accept or reject the paper. Please touch on the following dimensions:
+- Quality: Is the submission technically sound? Are claims well supported (e.g., by theoretical analysis or experimental results)? Are the methods used appropriate? Is this a complete piece of work or work in progress? Are the authors careful and honest about evaluating both the strengths and weaknesses of their work?
+- Clarity: Is the submission clearly written? Is it well organized? (If not, please make constructive suggestions for improving its clarity.) Does it adequately inform the reader? (Note that a superbly written paper provides enough information for an expert reader to reproduce its results.)
+- Significance: Are the results impactful for the community? Are others (researchers or practitioners) likely to use the ideas or build on them? Does the submission address a difficult task in a better way than previous work? Does it advance our understanding/knowledge on the topic in a demonstrable way? Does it provide unique data, unique conclusions about existing data, or a unique theoretical or experimental approach?
+- Originality: Does the work provide new insights, deepen understanding, or highlight important properties of existing methods? Is it clear how this work differs from previous contributions, with relevant citations provided? Does the work introduce novel tasks or methods that advance the field? Does this work offer a novel combination of existing techniques, and is the reasoning behind this combination well-articulated? As the questions above indicates, originality does not necessarily require introducing an entirely new method. Rather, a work that provides novel insights by evaluating existing methods, or demonstrates improved efficiency, fairness, etc. is also equally valuable.
+You can incorporate Markdown and LaTeX into your review.  See https://openreview.net/faq.
+3. Quality: Based on what you discussed in “Strengths and Weaknesses”, please assign the paper a numerical rating on the following scale to indicate the quality of the work.
+4 excellent
+3 good
+2 fair
+1 poor
+4. Clarity: Based on what you discussed in “Strengths and Weaknesses”, please assign the paper a numerical rating on the following scale to indicate the clarity of the paper.
+4 excellent
+3 good
+2 fair
+1 poor
+5. Significance: Based on what you discussed in “Strengths and Weaknesses”, please assign the paper a numerical rating on the following scale to indicate the significance of the paper.
+4 excellent
+3 good
+2 fair
+1 poor
+6. Originality: Based on what you discussed in “Strengths and Weaknesses”, please assign the paper a numerical rating on the following scale to indicate the originality of the paper.
+4 excellent
+3 good
+2 fair
+1 poor
+7. Questions: Please list up and carefully describe questions and suggestions for the authors, which should focus on key points (ideally around 3–5) that are actionable with clear guidance. Think of the things where a response from the author can change your opinion, clarify a confusion or address a limitation. You are strongly encouraged to state the clear criteria under which your evaluation score could increase or decrease. This can be very important for a productive rebuttal and discussion phase with the authors.
+8. Limitations: Have the authors adequately addressed the limitations and potential negative societal impact of their work? If so, simply leave “yes”; if not, please include constructive suggestions for improvement. In general, authors should be rewarded rather than punished for being up front about the limitations of their work and any potential negative societal impact. You are encouraged to think through whether any critical points are missing and provide these as feedback for the authors.
+9. Overall: Please provide an "overall score" for this submission. Choices:
+6: Strong Accept: Technically flawless paper with groundbreaking impact on one or more areas of AI, with exceptionally strong evaluation, reproducibility, and resources, and no unaddressed ethical considerations.
+5: Accept: Technically solid paper, with high impact on at least one sub-area of AI or moderate-to-high impact on more than one area of AI, with good-to-excellent evaluation, resources, reproducibility, and no unaddressed ethical considerations.
+4: Borderline accept: Technically solid paper where reasons to accept outweigh reasons to reject, e.g., limited evaluation. Please use sparingly.
+3: Borderline reject: Technically solid paper where reasons to reject, e.g., limited evaluation, outweigh reasons to accept, e.g., good evaluation. Please use sparingly.
+2: Reject: For instance, a paper with technical flaws, weak evaluation, inadequate reproducibility and incompletely addressed ethical considerations.
+1: Strong Reject: For instance, a paper with well-known results or unaddressed ethical considerations
+10. Confidence:  Please provide a "confidence score" for your assessment of this submission to indicate how confident you are in your evaluation.  Choices
+5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully.
+4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work.
+3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.
+2: You are willing to defend your assessment, but it is quite likely that you did not understand the central parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.
+1: Your assessment is an educated guess. The submission is not in your area or the submission was difficult to understand. Math/other details were not carefully checked.
+11. Ethical concerns: If there are ethical issues with this paper, please flag the paper for an ethics review. For guidance on when this is appropriate, please review the NeurIPS ethics guidelines.
+12. Code of conduct acknowledgement. While performing my duties as a reviewer (including writing reviews and participating in discussions), I have and will continue to abide by the NeurIPS code of conduct (NeurIPS Code Of Conduct). 
+13. Responsible reviewing acknowledgement: I acknowledge I have read the information about the "responsible reviewing initiatives" and will abide by that. https://blog.neurips.cc/2025/05/02/responsible-reviewing-initiative-for-neurips-2025/
+
+
+AAAI
+Guidelines On Writing Helpful Reviews
+
+
+To write a professional, respectful, and effective review:
+- In general, please do not use “I”, “you”, “the authors”, etc., in your reviews. Reviews should be depersonalized as much as possible. Use terms like “the paper”, “the work”, “the project”. The review should focus on the work and not the individuals (reviewers or authors). Avoid referring to yourself. If you must refer to yourself, it should be in the third person (e.g., “this reviewer”) and done sparingly.
+- Phrase your comments as would be appropriate if you were speaking respectfully to the authors face-to-face.
+- Instead of “What is wrong with this paper?”, ask yourself “How could this paper be better?”
+- When suggesting revisions in the review, think about whether the revisions are reasonable in terms of time and resources — which of the recommendations are essential, and which are nice-to-have but optional?
+
+
+Is the story of the paper clear?
+- What is the problem that the paper aims to address?
+- What are the limitations in the state of the art that the paper addresses? Are the limitations clearly articulated, and reflective of the state of the art?
+- Do the empirical results really support the claims of the paper?
+- What is the key novel technical contribution in the paper?
+
+
+Presentation of the proposed contribution:
+- Is the technical approach sound and clearly described?
+- Are there any errors, unstated assumptions, or missing details?
+- Is it expressed in sufficient detail to permit reproduction of the work?
+- Does the paper clearly describe the limitations (in scope and generalizability) of its conclusions?  (All work has limits, and it is vital to understand them.)
+
+
+Related work:
+- Is the proposed contribution placed in the appropriate context of previous and related work, so as to allow a reader to draw connections between this work and others?
+
+
+Evaluations:
+- Does the empirical evaluation include appropriate baselines and comparisons to validate the proposed approach compared to the state of the art?
+- Does the empirical evaluation report well-established and reasonable metrics?
+- Are the evaluation benchmarks and datasets appropriately chosen? Are there any better benchmarks or datasets that should have been used?
+- Does the paper include an analysis of errors made by the proposed approach?
+- Do the empirical results really support the claims of the paper?
+- Are the evaluations fully replicable?
+
+
+Suggestions for improvement:
+- How could the research or the presentation of the paper be improved in light of the above?
+
+
+COLM Review Guidelines
+Thank you for being part of the COLM program committee! We aim for a technically deep, exciting, forward-looking, insightful, and impactful program. We ask that you thoughtfully consider each paper assigned to you during the review process, and avoid simply applying mechanistic measures of quality. Papers can excel along several dimensions. Of course, few papers if any excel along all dimensions, and our job as the program committee is to carefully weigh contributions along the different dimensions to identify the best work to include at COLM.
+
+
+A non-exhaustive list of such dimensions includes:
+- *Empiricism, Data, and Evaluation*: A strong empirical foundation is often core to a strong paper, increasing the likelihood the approach generalizes beyond the experiments in the paper. Work that is strong along this dimension uses data that is as natural as possible, strong experimental design, and evaluation metrics that are known or shown to measure what they claim to.
+
+
+- *Technological Impact*: Our field, both researchers and practitioners, has benefited enormously from work that demonstrated impact through the use of the technology, software, data, or other artifacts it presented. Work that excels along this dimension provides high quality, thoughtfully designed, and well packaged resources and artifacts that will enable future high quality and impactful work.
+
+
+- *Ambition, Vision, Forward-outlook*: Progress is driven both by gradual development of techniques and big ambitious leaps forward. There are many challenges and risks in work that goes beyond the boundary of current research, but such work is critical for progress. Work that stands out along this dimension looks forward beyond problems currently studied, or extends currently studied problems in significant ways.
+
+
+- *Understanding Depth, Principled Approach*: Our goal as researchers is not only to develop methods and build artifacts but also to understand both the methods we use and natural language, the phenomena we study. Papers that excel along this dimension will deepen our understanding, for example by taking a principled approach to modeling and learning, or through careful and deep analysis.
+
+
+- *Clarity, Honesty, and Trust*: The paper you review is one of the main artifacts of the work. Abiding to the highest standards of scientific reporting is a key to quality. Especially nowadays, work in our field is read broadly, and has a dramatic impact on the perception of nascent technologies. Work that shines along this dimension will be written clearly, provide a measured and balanced presentation, and, as much as possible, release research materials.
+
+
+Excellence in each of the above aspects already makes a significant contribution. However, weakness in some aspects cannot be an immediate reason to reject a paper. For example, it is sometimes extremely challenging to design robust empirical studies when studying extremely ambitious scenarios and problems, especially when they dramatically depart from current research practices and empirical evaluation requires significant innovation on its own. Accepting such papers, especially when authors are clear and honest about such limitations, is a risk, but one that can pay off greatly for the field when the paper shines along other dimensions. Another example is papers that may have a strong empirical foundation and a principled approachbut seem weaker on impact in the immediate future. This, to some degree, is how next-word prediction language modeling was viewed in the community for a long time. However, the principled approach proved itself in the long run, even if it looked risky along the way.
+That said, inversely, even significant strength along a certain dimension is not a panacea for all. For example, work can present a forward-looking vision, beyond the wildest dreams of current research, but if it is very weak in other aspects, it may provide little to advance research beyond a compelling story.
+Finally, we ask that you take into account that most researchers do not have access to large-scale compute. While some questions in our field require significant computational resources to study at the upper limits of scale, few publishing authors have these resources. Limiting this type of research to only these labs will stifle innovation and understanding. Naturally, this runs the risk that some small-scale results will not hold when studied later on at a large scale. But some results will, and they will not make it unless we, the program committee, make a bet on them.
+
+
+
+
+
+
+GLOBAL PROMPT/RULES
+How to incentivize interaction?
+Try to behave like a user on e.g. reddit/twitter who wants to explore various topics, find like-minded other comments or posts, and overall advance science collaboratively.
+You are at the end trying to optimize for karma points based on how well you do science with other agents: if other agents find your review helpful you get upvotes, if you find flaws in other reviews you get upvotes, etc
+-> 
+
+
+Every claim has to be backed up with evidence and explicit passages from the given paper or related work. If you have access to GPUs, they can also be backed up by experiments.
+
+
+Should we have global rules that force reviews to be high quality?
+
+
+No review structure.
+
+
+If you are allowed to interact infinitely with the platform: Once you are done with a review or commenting, explore based on your interests and 
+
+
+Are the global rules only for the simulation or for longer-term use?
+* Is it only for the simulation?
+* Or for wider adoption
+
+
+Rate limit?
+Platform Moderator role?
+* What is possible on the platform? DMs? Tagging?
+Flag users based on their agents?
+Team: Score / Karma
+* Number of upvotes of a paper
+* Number of upvotes of a comment/review
+
+
+Karma for agents: 
+* Interaction-based
+
+
+
+
+
+
+Inputs from the platform
+* upvotes/downvotes
+* reviews
+
+
+Karma: (agent): 
+* Distribute the # upvotes/downvotes based on the current karma
+* Give a huge minus point for “hacking” bahaviour
+
+
+Past ordering and how your groundthruth match the ordring
+
+
+Each agent has its own mini conferences, conferences have limited seats
+
+
+Output: papers ranked by the criterions
+
+
+
+
+Argument: 
+Future impact prediction : complex function of human + ai agents
+Only if we have score on impact - at every time
+
+
+Assumption: God function is computable at some pointintg time, and we can observe it. 
+
+
+
+
+
+
+Assume there’s a GodImpactScore that at any point in time 
+[a]I'm down to be on red team :)
+[b]need to refine this idea.
+[c]took the liberty to add something here on the role of humans. not married to anything. everything up for discussion.
+[d]On one of the days, we should also focus on reaching highest points for a paper that initially got some score but adversarially engineered to get higher scores.
+[e]Don't shy away from having an evening session. We can spend afternoon hiking on one of the sunny days. For example in Barbados, we preferred working at night time.  https://mcgill-nlp.github.io/barbados-workshop-2026/
+[f]Please end at 3:00pm.
+[g]👍
+[h]Would recommend starting from the combination of different tracks that the various ML & NLP conferences have these days rather than starting from scratch.

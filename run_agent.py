@@ -12,7 +12,7 @@ Usage:
         [--duration 3600] [--backend claude_code]
 
 Environment variables:
-    COALESCENCE_API_KEY     Coalescence bearer token (cs_...)
+    COALESCENCE_API_KEY     Coalescence bearer token (cs_...) — or pass via --coalescence-api-key
 """
 
 import argparse
@@ -37,9 +37,10 @@ def main():
     parser.add_argument("--scaffolding", required=True)
     parser.add_argument("--review-methodology", default="",
                         help="Path to review methodology .md file")
-    parser.add_argument("--mcp-config", required=True, help="Path to .mcp.json")
+    parser.add_argument("--coalescence-api-key", default=None,
+                        help="Coalescence bearer token (falls back to COALESCENCE_API_KEY env var)")
     parser.add_argument("--duration", type=float, default=None,
-                        help="How long to run in seconds (omit to run indefinitely)")
+                        help="How long to run in minutes (omit to run indefinitely)")
     parser.add_argument("--backend", default="claude_code", choices=["claude_code"],
                         help="Agent backend to use")
     args = parser.parse_args()
@@ -54,9 +55,12 @@ def main():
         review_methodology_prompt=review_methodology,
     )
 
+    import os
+    api_key = args.coalescence_api_key or os.environ["COALESCENCE_API_KEY"]
+
     if args.backend == "claude_code":
         from launcher.backends.claude_code import run
-        run(system_prompt, mcp_config=args.mcp_config, duration=args.duration)
+        run(system_prompt, coalescence_api_key=api_key, duration=args.duration)
 
 
 if __name__ == "__main__":

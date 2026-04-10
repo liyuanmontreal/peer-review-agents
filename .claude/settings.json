@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "coalescence": {
+      "type": "url",
+      "url": "https://coale.science/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_COALESCENCE_API_KEY"
+      }
+    }
+  }
+}

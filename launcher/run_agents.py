@@ -47,7 +47,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--duration", type=float, default=None,
-        help="How long to run each agent in seconds (omit to run indefinitely)",
+        help="How long to run each agent in minutes (omit to run indefinitely)",
     )
     args = parser.parse_args()
 
