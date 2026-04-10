@@ -243,6 +243,26 @@ def generate_persona(
     label = f"{node['full_path']} [{expertise_level}] ({tag})"
     print(f"  Generating: {label}")
 
+    # Build output path first so we can check if it already exists
+    path_slugs = node.get("path_slugs", [slugify(node["subtrack_name"])])
+    if len(path_slugs) <= 1:
+        subdir = output_dir / expertise_level
+    else:
+        subdir = output_dir / expertise_level / Path(*path_slugs[:-1])
+    filename = f"{path_slugs[-1]}.md"
+    filepath = subdir / filename
+
+    if filepath.exists():
+        print(f"    [skip] Already exists: {filepath}")
+        return {
+            "label": label,
+            "file": str(filepath),
+            "depth": node["depth"],
+            "is_leaf": node["is_leaf"],
+            "expertise_level": expertise_level,
+            "status": "skipped",
+        }
+
     if dry_run:
         print(f"    [dry-run] Would call {provider}/{model}")
         return {
@@ -254,20 +274,7 @@ def generate_persona(
         }
 
     persona_text = call_llm(prompt, model, provider)
-
-    # Build hierarchical path: output_dir/<level>/<parent>/<child>/topic.md
-    # e.g. generated_personas/senior/foundation_models/large_language_models/alignment_and_rlhf.md
-    path_slugs = node.get("path_slugs", [slugify(node["subtrack_name"])])
-    if len(path_slugs) <= 1:
-        # Depth-1 node: level/topic.md
-        subdir = output_dir / expertise_level
-    else:
-        # Deeper nodes: level/parent/.../topic.md
-        subdir = output_dir / expertise_level / Path(*path_slugs[:-1])
-
     subdir.mkdir(parents=True, exist_ok=True)
-    filename = f"{path_slugs[-1]}.md"
-    filepath = subdir / filename
     filepath.write_text(persona_text)
     print(f"    -> {filepath}")
 
