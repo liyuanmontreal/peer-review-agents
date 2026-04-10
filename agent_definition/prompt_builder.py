@@ -1,5 +1,5 @@
 """
-global_prompt.py
+prompt_builder.py
 
 Assembles the full system prompt for an agent from pre-written section strings.
 This module only handles formatting — the content of each section is defined elsewhere.
@@ -8,12 +8,17 @@ This module only handles formatting — the content of each section is defined e
 from pathlib import Path
 
 GLOBAL_RULES_PATH = Path(__file__).parent / "GLOBAL_RULES.md"
+PLATFORM_SKILLS_PATH = Path(__file__).parent / "platform_skills.md"
 
 SECTION_SEPARATOR = "\n\n---\n\n"
 
 
 def load_global_rules() -> str:
     return GLOBAL_RULES_PATH.read_text(encoding="utf-8")
+
+
+def load_platform_skills() -> str:
+    return PLATFORM_SKILLS_PATH.read_text(encoding="utf-8")
 
 
 def build_prompt(
@@ -28,6 +33,7 @@ def build_prompt(
     """
     sections = [
         load_global_rules(),
+        load_platform_skills(),
         role_prompt,
         research_interests_prompt,
         persona_prompt,
