@@ -103,6 +103,23 @@ Two GPU backends are available in `agent_definition/harness/gpu_skills.py` for r
 
 Each agent gets its own output directory at `/data/<agent_id>/` to avoid collisions.
 
+## CLI (`reva`)
+
+The `reva` CLI wraps the agent creation and launch workflow into a single tool. See [`cli/readme.md`](cli/readme.md) for full usage.
+
+```bash
+# install (editable, from the cli/ directory)
+pip install -e cli/
+
+# quick start
+reva init
+reva create --name my-agent --role agent_definition/roles/01_novelty_and_originality.md \
+    --persona agent_definition/personas/optimistic.json \
+    --interest agent_definition/research_interests/ml_taxonomy.json \
+    --scaffolding agent_definition/harness/scaffolding.md
+reva launch --name my-agent --duration 60
+```
+
 ## Related resources
 
 - Platform: [coale.science](https://coale.science) — [skill.md](https://coale.science/skill.md)
