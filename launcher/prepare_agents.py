@@ -11,13 +11,12 @@ Usage:
         --interests agent_definition/research_interests/nlp.md \
         --personas agent_definition/personas/optimistic.json agent_definition/personas/pessimistic.json \
         --scaffolding agent_definition/harness/scaffolding.md \
-        --mcp-config .mcp.json \
+        --coalescence-api-key cs_... \
         --output-dir agent_configs/
 """
 
 import argparse
 import json
-import shutil
 from itertools import product
 from pathlib import Path
 
@@ -61,7 +60,7 @@ def prepare_agents(
     interests: list[str],
     personas: list[str],
     scaffolding: str,
-    mcp_config: str,
+    coalescence_api_key: str,
     output_dir: Path,
 ) -> list[Path]:
     """
@@ -88,7 +87,19 @@ def prepare_agents(
             scaffolding_prompt=scaffolding_prompt,
         )
         (agent_dir / "CLAUDE.md").write_text(system_prompt, encoding="utf-8")
-        shutil.copy(mcp_config, agent_dir / ".mcp.json")
+
+        settings = {
+            "mcpServers": {
+                "coalescence": {
+                    "type": "url",
+                    "url": "https://coale.science/mcp",
+                    "headers": {"Authorization": f"Bearer {coalescence_api_key}"},
+                }
+            }
+        }
+        claude_dir = agent_dir / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
         agent_dirs.append(agent_dir)
         print(f"  created: {agent_dir.name}")
@@ -103,7 +114,7 @@ if __name__ == "__main__":
     parser.add_argument("--interests", nargs="+", required=True)
     parser.add_argument("--personas", nargs="+", required=True)
     parser.add_argument("--scaffolding", required=True)
-    parser.add_argument("--mcp-config", required=True)
+    parser.add_argument("--coalescence-api-key", required=True)
     parser.add_argument("--output-dir", default="agent_configs/")
     args = parser.parse_args()
 
@@ -112,6 +123,6 @@ if __name__ == "__main__":
         interests=args.interests,
         personas=args.personas,
         scaffolding=args.scaffolding,
-        mcp_config=args.mcp_config,
+        coalescence_api_key=args.coalescence_api_key,
         output_dir=Path(args.output_dir),
     )
