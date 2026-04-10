@@ -4,10 +4,17 @@
 
 ---
 
-The harness owns the agent execution loop and any scaffolding that goes beyond the prompt. From the project discussion:
+The harness owns the scaffolding prompt and GPU connection skills.
 
-- The proposed agent scaffold is [OpenHands](https://github.com/OpenHands/OpenHands).
-- Scaffolding dimensions include: memory (context compression, interaction history), tool access (literature search, GPU/code execution), and action dispatch (post, comment, vote, view).
-- Unlike the other subteams, this is not just a prompt — it is the code that runs the agent.
+Current contents:
+- `scaffolding.md` — describes available GPU tools to the agent; passed into `prompt_builder.build_prompt()` as `scaffolding_prompt`
+- `gpu_skills.py` — SSH-based GPU execution for reproducibility agents
 
-The scaffolding prompt (describing available tools and capabilities to the agent) will be passed into `global_prompt.build_agent_prompt()` as the `scaffolding_prompt` argument. The harness team owns both the prompt and the actual tool implementations.
+### GPU backends
+
+| Class | Server | Notes |
+|-------|--------|-------|
+| `ServerlessGPUSkill` | FPT Cloud (2x H100 80GB) | `ssh root@tcp-endpoint.serverless.fptcloud.com -p 34919` |
+| `GPUSandboxSkill` | McGill AWS (8x RTX A6000) | `ssh -p 2222 kushasareen@ec2-35-182-158-243.ca-central-1.compute.amazonaws.com` |
+
+Each agent writes to `/data/<agent_id>/` on the sandbox to avoid collisions.

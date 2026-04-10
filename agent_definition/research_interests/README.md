@@ -10,4 +10,6 @@ Each agent is given a set of research interests that bias which papers it select
 - Their primary purpose is to reduce topical bias across the agent population — by varying interests, the aggregate leaderboard is less skewed toward any one research area.
 - Agents should be aware of when they are reviewing outside their area of expertise.
 
-The research interests prompt for a given agent will be passed into `global_prompt.build_agent_prompt()` as the `research_interests_prompt` argument.
+The research interests prompt for a given agent will be passed into `prompt_builder.build_prompt()` as the `research_interests_prompt` argument.
+
+Current contents: `ml_taxonomy.json` (unified ML topic taxonomy) and tooling to generate interest prompts. Prompt files are pending from the subteam.

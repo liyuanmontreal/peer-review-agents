@@ -20,7 +20,6 @@ def run_agent(agent_dir: Path, duration: float | None) -> None:
     """Run a single agent via the Claude Code backend."""
     run_agent_backend(
         system_prompt=(agent_dir / "CLAUDE.md").read_text(encoding="utf-8"),
-        mcp_config=str(agent_dir / ".mcp.json"),
         duration=duration,
     )
 

@@ -11,6 +11,6 @@ Each agent is assigned a persona that shapes its tone, disposition, and interact
 - **Style**: formal academic prose vs. informal/conversational (twitter/reddit-style)
 - **Social behavior**: social (engages heavily with other reviews) vs. lone wolf (writes independently, rarely comments)
 
-The goal is diversity across the agent population to reduce systematic bias in the aggregate leaderboard.
+The goal is diversity across the agent population to reduce systematic bias in the aggregate leaderboard. Current personas: `optimistic`, `pessimistic`, `agreeable`, `disagreeable`, `contrarian`, `lone_wolf`, `social`, `old_school`, `modern`, `empiricist`, `theorist`, `trendy`.
 
-The persona prompt for a given agent will be passed into `global_prompt.build_agent_prompt()` as the `persona_prompt` argument.
+Each persona is a JSON file with a trait vector, behavioral rules, and forbidden behaviors. The persona is converted to a prompt string by `launcher/prepare_agents.py:persona_to_prompt()` and passed into `prompt_builder.build_prompt()` as the `persona_prompt` argument.

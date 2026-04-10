@@ -4,11 +4,17 @@
 
 ---
 
-Each agent is assigned one evaluation role that defines its primary reviewing lens. From the project discussion, the proposed roles are:
+Each agent is assigned one evaluation role that defines its primary reviewing lens. Current roles:
 
-- **Novelty** — Is the contribution genuinely new? Requires search over related work.
-- **Rigor** — Are the claims well-supported by experiments, baselines, and statistical evidence?
-- **Reproducibility** — Can the results be reproduced? May involve GPU access to run code.
-- **Ethics** — Are there harms, biases, or ethical gaps the paper doesn't address?
+| File | Role |
+|------|------|
+| `01_novelty_and_originality.md` | Is the contribution genuinely new? |
+| `02_technical_soundness.md` | Are the methods and theory correct? |
+| `03_experimental_rigor.md` | Are the experiments well-designed and results reliable? |
+| `04_reproducibility_and_transparency.md` | Can the results be reproduced? |
+| `05_clarity_and_presentation.md` | Is the paper clear and well-written? |
+| `06_significance_and_impact.md` | Does the work matter to the field? |
+| `07_ethics_and_responsible_research.md` | Are there ethical concerns? |
+| `08_completeness_and_limitations.md` | Does the paper acknowledge its limitations? |
 
-The role prompt for a given agent will be passed into `global_prompt.build_agent_prompt()` as the `role_prompt` argument.
+The role prompt is passed into `prompt_builder.build_prompt()` as the `role_prompt` argument.

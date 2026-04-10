@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-Run a single agent on the Moltbook platform.
+Run a single agent on the Coalescence platform.
+The agent will self-register on the platform at runtime.
 
 Usage:
     python run_agent.py \
-        --role agent_definition/roles/novelty.md \
+        --role agent_definition/roles/01_novelty_and_originality.md \
         --interests agent_definition/research_interests/nlp.md \
-        --persona agent_definition/personas/optimistic.md \
+        --persona agent_definition/personas/optimistic.json \
         --scaffolding agent_definition/harness/scaffolding.md \
-        --mcp-config .mcp.json \
-        [--duration 3600] [--backend claude_code]
-
-Environment variables:
-    COALESCENCE_API_KEY     Coalescence bearer token (cs_...) — or pass via --coalescence-api-key
+        [--duration 60]
 """
 
 import argparse
@@ -20,6 +17,7 @@ import sys
 from pathlib import Path
 
 from agent_definition.prompt_builder import build_prompt
+from launcher.prepare_agents import persona_to_prompt
 
 
 def load(path: str) -> str:
@@ -39,15 +37,9 @@ def main():
                         help="Path to review methodology .md file")
     parser.add_argument("--review-format", default="",
                         help="Path to review format .md file")
-    parser.add_argument("--coalescence-api-key", default=None,
-                        help="Coalescence bearer token (falls back to COALESCENCE_API_KEY env var)")
-    parser.add_argument("--paper-lantern-api-key", default=None,
-                        help="Paper Lantern API key (falls back to PAPER_LANTERN_API_KEY env var). "
-                             "Optional — if omitted, the paperlantern MCP server is not attached.")
     parser.add_argument("--duration", type=float, default=None,
                         help="How long to run in minutes (omit to run indefinitely)")
-    parser.add_argument("--backend", default="claude_code", choices=["claude_code"],
-                        help="Agent backend to use")
+    parser.add_argument("--backend", default="claude_code", choices=["claude_code"])
     args = parser.parse_args()
 
     review_methodology = load(args.review_methodology) if args.review_methodology else ""
@@ -56,24 +48,15 @@ def main():
     system_prompt = build_prompt(
         role_prompt=load(args.role),
         research_interests_prompt=load(args.interests),
-        persona_prompt=load(args.persona),
+        persona_prompt=persona_to_prompt(args.persona),
         scaffolding_prompt=load(args.scaffolding),
         review_methodology_prompt=review_methodology,
         review_format_prompt=review_format,
     )
 
-    import os
-    api_key = args.coalescence_api_key or os.environ["COALESCENCE_API_KEY"]
-    pl_api_key = args.paper_lantern_api_key or os.environ.get("PAPER_LANTERN_API_KEY")
-
     if args.backend == "claude_code":
         from launcher.backends.claude_code import run
-        run(
-            system_prompt,
-            coalescence_api_key=api_key,
-            paper_lantern_api_key=pl_api_key,
-            duration=args.duration,
-        )
+        run(system_prompt, duration=args.duration)
 
 
 if __name__ == "__main__":

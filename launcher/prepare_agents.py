@@ -3,15 +3,15 @@ prepare_agents.py
 
 Generates agent directories from a Cartesian product of role × research interests
 × persona × scaffolding. Each output directory contains a CLAUDE.md (assembled
-system prompt) and a copy of the MCP config, ready for run_agents.py to consume.
+system prompt). Agents self-register on the platform at runtime.
 
 Usage:
     python launcher/prepare_agents.py \
-        --roles agent_definition/roles/01_novelty_and_originality.md agent_definition/roles/02_technical_soundness.md \
-        --interests agent_definition/research_interests/nlp.md \
-        --personas agent_definition/personas/optimistic.json agent_definition/personas/pessimistic.json \
+        --roles agent_definition/roles/*.md \
+        --interests agent_definition/research_interests/*.md \
+        --personas agent_definition/personas/*.json \
         --scaffolding agent_definition/harness/scaffolding.md \
-        --coalescence-api-keys cs_key1 cs_key2 ... \
+        --n 50 \
         --output-dir agent_configs/
 """
 
@@ -60,60 +60,31 @@ def prepare_agents(
     interests: list[str],
     personas: list[str],
     scaffolding: str,
-    coalescence_api_keys: list[str],
     output_dir: Path,
-    n: int | None = None,
+    n: int,
     strategy: str = "stratified",
     seed: int = 42,
-    paper_lantern_api_key: str | None = None,
 ) -> list[Path]:
     """
     Generate agent directories from a sampled subset of role × interests × persona.
     Returns list of created agent directories.
     """
-    samples = sample(roles, interests, personas, n=n or len(coalescence_api_keys),
-                     strategy=strategy, seed=seed)
-
-    if len(coalescence_api_keys) < len(samples):
-        raise ValueError(
-            f"{len(samples)} agents sampled but only {len(coalescence_api_keys)} API keys provided."
-        )
-
+    samples = sample(roles, interests, personas, n=n, strategy=strategy, seed=seed)
     output_dir.mkdir(parents=True, exist_ok=True)
     scaffolding_prompt = load(scaffolding)
     agent_dirs = []
 
     for i, agent in enumerate(samples):
-        role, interests_path, persona = agent.role, agent.interests, agent.persona
-        agent_name = f"agent_{i:03d}__{agent.name}"
-
-        agent_dir = output_dir / agent_name
+        agent_dir = output_dir / f"agent_{i:03d}__{agent.name}"
         agent_dir.mkdir(exist_ok=True)
 
         system_prompt = build_prompt(
-            role_prompt=load(role),
-            research_interests_prompt=load(interests_path),
-            persona_prompt=persona_to_prompt(persona),
+            role_prompt=load(agent.role),
+            research_interests_prompt=load(agent.interests),
+            persona_prompt=persona_to_prompt(agent.persona),
             scaffolding_prompt=scaffolding_prompt,
         )
         (agent_dir / "CLAUDE.md").write_text(system_prompt, encoding="utf-8")
-
-        mcp_servers = {
-            "coalescence": {
-                "type": "url",
-                "url": "https://coale.science/mcp",
-                "headers": {"Authorization": f"Bearer {coalescence_api_keys[i]}"},
-            }
-        }
-        if paper_lantern_api_key:
-            mcp_servers["paperlantern"] = {
-                "type": "url",
-                "url": f"https://mcp.paperlantern.ai/chat/mcp?key={paper_lantern_api_key}",
-            }
-        settings = {"mcpServers": mcp_servers}
-        claude_dir = agent_dir / ".claude"
-        claude_dir.mkdir()
-        (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
         agent_dirs.append(agent_dir)
         print(f"  created: {agent_dir.name}")
@@ -128,15 +99,8 @@ if __name__ == "__main__":
     parser.add_argument("--interests", nargs="+", required=True)
     parser.add_argument("--personas", nargs="+", required=True)
     parser.add_argument("--scaffolding", required=True)
-    parser.add_argument("--coalescence-api-keys", nargs="+", required=True,
-                        help="One Coalescence API key per agent")
-    parser.add_argument("--paper-lantern-api-key", default=None,
-                        help="Shared Paper Lantern API key (optional). If provided, all agents "
-                             "get the paperlantern MCP server in their config.")
-    parser.add_argument("--n", type=int, default=None,
-                        help="Number of agents to sample (defaults to number of API keys provided)")
-    parser.add_argument("--strategy", default="stratified", choices=["random", "stratified"],
-                        help="Sampling strategy")
+    parser.add_argument("--n", type=int, required=True, help="Number of agents to sample")
+    parser.add_argument("--strategy", default="stratified", choices=["random", "stratified"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="agent_configs/")
     args = parser.parse_args()
@@ -146,10 +110,8 @@ if __name__ == "__main__":
         interests=args.interests,
         personas=args.personas,
         scaffolding=args.scaffolding,
-        coalescence_api_keys=args.coalescence_api_keys,
         n=args.n,
         strategy=args.strategy,
         seed=args.seed,
         output_dir=Path(args.output_dir),
-        paper_lantern_api_key=args.paper_lantern_api_key,
     )
