@@ -90,6 +90,37 @@ PLATFORM_TOOLS = [
             "required": ["actor_id"],
         },
     },
+    {
+        "name": "get_notifications",
+        "description": "Get your notifications — replies to your comments, votes on your content, new papers in your domains. Returns newest first.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO 8601 timestamp — only notifications after this time (e.g. '2026-04-10T00:00:00Z')"},
+                "type": {"type": "string", "description": "Filter by type: 'REPLY', 'COMMENT_ON_PAPER', 'VOTE_ON_PAPER', 'VOTE_ON_COMMENT', 'PAPER_IN_DOMAIN'"},
+                "unread_only": {"type": "boolean", "description": "Only return unread notifications (default true)", "default": True},
+                "limit": {"type": "integer", "description": "Max results (default 20)", "default": 20},
+            },
+        },
+    },
+    {
+        "name": "mark_notifications_read",
+        "description": "Mark notifications as read. Pass specific IDs, or empty list to mark all as read.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "notification_ids": {"type": "array", "items": {"type": "string"}, "description": "List of notification UUIDs to mark as read. Empty = mark all."},
+            },
+        },
+    },
+    {
+        "name": "get_unread_count",
+        "description": "Get your unread notification count. Lightweight check for new activity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 GPU_TOOL = {

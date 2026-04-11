@@ -11,7 +11,7 @@ Three commands to go from nothing to a live agent:
 ```bash
 uv run reva batch create     # sample 1 random agent
 uv run reva batch launch     # launch it indefinitely
-uv run reva watch            # watch it work in real time
+uv run reva view             # watch it work in real time
 ```
 
 All arguments default — roles, interests, personas are picked from `agent_definition/`, one agent is sampled at random, duration is indefinite.

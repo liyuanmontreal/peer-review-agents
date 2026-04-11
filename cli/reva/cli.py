@@ -54,7 +54,14 @@ def init(ctx, path):
     config_file = write_default_config(target)
     # create default subdirectories
     cfg = load_config(str(config_file))
-    for d in [cfg.agents_dir, cfg.personas_dir, cfg.roles_dir, cfg.interests_dir]:
+    for d in [
+        cfg.agents_dir,
+        cfg.personas_dir,
+        cfg.roles_dir,
+        cfg.interests_dir,
+        cfg.review_methodology_dir,
+        cfg.review_format_dir,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
     click.echo(f"Initialized reva project at {target}")
     click.echo(f"  config: {config_file}")
@@ -104,6 +111,8 @@ def create(ctx, name, backend, role, persona, interest):
         "role": str(Path(role).resolve()),
         "persona": str(Path(persona).resolve()),
         "interest": str(Path(interest).resolve()),
+        "review_methodology": str(cfg.review_methodology_path.resolve()) if cfg.review_methodology_path else None,
+        "review_format": str(cfg.review_format_path.resolve()) if cfg.review_format_path else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     (agent_dir / "config.json").write_text(json.dumps(config_data, indent=2), encoding="utf-8")
@@ -398,6 +407,18 @@ def batch():
 @click.option("--roles", multiple=True, help="Role .md file globs (default: roles_dir/*.md).")
 @click.option("--interests", "interest_globs", multiple=True, help="Interest .md file globs (default: interests_dir/**/*.md).")
 @click.option("--personas", multiple=True, help="Persona .json file globs (default: personas_dir/*.json).")
+@click.option(
+    "--methodologies",
+    "methodology_globs",
+    multiple=True,
+    help="Review methodology .md file globs. If provided, methodology becomes a sampled axis; otherwise the config default is used for every agent.",
+)
+@click.option(
+    "--formats",
+    "format_globs",
+    multiple=True,
+    help="Review format .md file globs. If provided, format becomes a sampled axis; otherwise the config default is used for every agent.",
+)
 @click.option("--n", "count", type=int, default=1, help="Number of agents to sample (default: 1).")
 @click.option("--strategy", type=click.Choice(["stratified", "random"]), default="random")
 @click.option("--seed", type=int, default=42)
@@ -405,8 +426,8 @@ def batch():
 @click.option("--output-dir", type=click.Path(), default=None, help="Output directory (default: agents_dir).")
 @click.option("--clean", is_flag=True, default=False, help="Kill running agents and wipe output dir before creating.")
 @click.pass_context
-def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, backend, output_dir, clean):
-    """Create a batch of agents by sampling from role x interest x persona."""
+def batch_create(ctx, roles, interest_globs, personas, methodology_globs, format_globs, count, strategy, seed, backend, output_dir, clean):
+    """Create a batch of agents by sampling from role x interest x persona (optionally x methodology x format)."""
     cfg = _get_config(ctx)
     out = Path(output_dir) if output_dir else cfg.agents_dir
 
@@ -427,6 +448,12 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
     persona_files = _expand_globs(personas) if personas else sorted(
         str(f) for f in cfg.personas_dir.glob("*.json") if not f.name.startswith("all_")
     )
+    methodology_files = _expand_globs(methodology_globs) if methodology_globs else sorted(
+        str(f) for f in cfg.review_methodology_dir.glob("*.md") if f.name != "README.md"
+    )
+    format_files = _expand_globs(format_globs) if format_globs else sorted(
+        str(f) for f in cfg.review_format_dir.glob("*.md") if f.name != "README.md"
+    )
 
     if not role_files:
         raise click.ClickException("No role files matched.")
@@ -434,11 +461,28 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
         raise click.ClickException("No interest files matched.")
     if not persona_files:
         raise click.ClickException("No persona files matched.")
+    if not methodology_files:
+        raise click.ClickException("No methodology files matched.")
+    if not format_files:
+        raise click.ClickException("No review format files matched.")
 
-    click.echo(f"Roles: {len(role_files)}, Interests: {len(interest_files)}, Personas: {len(persona_files)}")
+    click.echo(
+        f"Roles: {len(role_files)}, Interests: {len(interest_files)}, "
+        f"Personas: {len(persona_files)}, Methodologies: {len(methodology_files)}, "
+        f"Formats: {len(format_files)}"
+    )
     click.echo(f"Sampling {count} agents ({strategy}, seed={seed})\n")
 
-    samples = sample(role_files, interest_files, persona_files, n=count, strategy=strategy, seed=seed)
+    samples = sample(
+        role_files,
+        interest_files,
+        persona_files,
+        methodology_files,
+        format_files,
+        n=count,
+        strategy=strategy,
+        seed=seed,
+    )
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -455,8 +499,8 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
             interest_path=Path(s.interests),
             global_rules_path=cfg.global_rules_path,
             platform_skills_path=cfg.platform_skills_path,
-            review_methodology_path=cfg.review_methodology_path,
-            review_format_path=cfg.review_format_path,
+            review_methodology_path=Path(s.methodology),
+            review_format_path=Path(s.review_format),
         )
 
         (agent_dir / "prompt.md").write_text(prompt, encoding="utf-8")
@@ -469,6 +513,8 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
             "role": str(Path(s.role).resolve()),
             "persona": str(Path(s.persona).resolve()),
             "interest": str(Path(s.interests).resolve()),
+            "review_methodology": str(Path(s.methodology).resolve()),
+            "review_format": str(Path(s.review_format).resolve()),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         (agent_dir / "config.json").write_text(json.dumps(config_data, indent=2), encoding="utf-8")
@@ -547,18 +593,27 @@ def debug(ctx, count, strategy, seed):
 
     role_files = sorted(str(f) for f in cfg.roles_dir.glob("*.md") if f.name != "README.md")
     interest_files = sorted(str(f) for f in cfg.interests_dir.glob("**/*.md") if f.name != "README.md")
-    persona_files = sorted(str(f) for f in cfg.personas_dir.glob("*.json") if f.name.startswith("all_"))
-
-    # filter out aggregate files
     persona_files = sorted(str(f) for f in cfg.personas_dir.glob("*.json") if not f.name.startswith("all_"))
+    methodology_files = sorted(str(f) for f in cfg.review_methodology_dir.glob("*.md") if f.name != "README.md")
+    format_files = sorted(str(f) for f in cfg.review_format_dir.glob("*.md") if f.name != "README.md")
 
-    if not role_files or not interest_files or not persona_files:
+    if not role_files or not interest_files or not persona_files or not methodology_files or not format_files:
         raise click.ClickException(
             f"Not enough components. Roles: {len(role_files)}, "
-            f"Interests: {len(interest_files)}, Personas: {len(persona_files)}"
+            f"Interests: {len(interest_files)}, Personas: {len(persona_files)}, "
+            f"Methodologies: {len(methodology_files)}, Formats: {len(format_files)}"
         )
 
-    samples = sample(role_files, interest_files, persona_files, n=count, strategy=strategy, seed=seed)
+    samples = sample(
+        role_files,
+        interest_files,
+        persona_files,
+        methodology_files,
+        format_files,
+        n=count,
+        strategy=strategy,
+        seed=seed,
+    )
 
     separator = "\n" + "=" * 80 + "\n"
     for i, s in enumerate(samples):
@@ -568,15 +623,17 @@ def debug(ctx, count, strategy, seed):
             interest_path=Path(s.interests),
             global_rules_path=cfg.global_rules_path,
             platform_skills_path=cfg.platform_skills_path,
-            review_methodology_path=cfg.review_methodology_path,
-            review_format_path=cfg.review_format_path,
+            review_methodology_path=Path(s.methodology),
+            review_format_path=Path(s.review_format),
         )
         click.echo(separator)
         click.echo(f"Agent {i + 1}/{len(samples)}: {s.name}")
-        click.echo(f"  role:      {Path(s.role).name}")
-        click.echo(f"  interests: {Path(s.interests).name}")
-        click.echo(f"  persona:   {Path(s.persona).name}")
-        click.echo(f"  chars:     {len(prompt)}")
+        click.echo(f"  role:         {Path(s.role).name}")
+        click.echo(f"  interests:    {Path(s.interests).name}")
+        click.echo(f"  persona:      {Path(s.persona).name}")
+        click.echo(f"  methodology:  {Path(s.methodology).name}")
+        click.echo(f"  format:       {Path(s.review_format).name}")
+        click.echo(f"  chars:        {len(prompt)}")
         click.echo(separator)
         click.echo(prompt)
 

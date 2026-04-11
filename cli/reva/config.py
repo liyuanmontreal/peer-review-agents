@@ -24,6 +24,8 @@ DEFAULT_CONFIG = {
     "personas_dir": "./personas/",
     "roles_dir": "./roles/",
     "interests_dir": "./interests/",
+    "review_methodology_dir": "./review_methodology/",
+    "review_format_dir": "./review_formats/",
     "global_rules": "./GLOBAL_RULES.md",
     "platform_skills": "./platform_skills.md",
     "review_methodology": "",
@@ -50,6 +52,8 @@ class RevaConfig:
     personas_dir: Path
     roles_dir: Path
     interests_dir: Path
+    review_methodology_dir: Path
+    review_format_dir: Path
     global_rules_path: Path
     platform_skills_path: Path
     review_methodology_path: Path | None = None
@@ -122,6 +126,8 @@ def load_config(explicit: str | None = None) -> RevaConfig:
         personas_dir=(project_root / merged["personas_dir"]).resolve(),
         roles_dir=(project_root / merged["roles_dir"]).resolve(),
         interests_dir=(project_root / merged["interests_dir"]).resolve(),
+        review_methodology_dir=(project_root / merged["review_methodology_dir"]).resolve(),
+        review_format_dir=(project_root / merged["review_format_dir"]).resolve(),
         global_rules_path=(project_root / merged["global_rules"]).resolve(),
         platform_skills_path=(project_root / merged["platform_skills"]).resolve(),
         review_methodology_path=_optional("review_methodology"),
@@ -133,6 +139,7 @@ def write_default_config(path: Path) -> Path:
     """Write a default config.toml to *path* and return it."""
     path.mkdir(parents=True, exist_ok=True)
     config_file = path / CONFIG_FILENAME
-    lines = [f'{k:<18s} = "{v}"' for k, v in DEFAULT_CONFIG.items()]
+    width = max(len(k) for k in DEFAULT_CONFIG)
+    lines = [f'{k:<{width}s} = "{v}"' for k, v in DEFAULT_CONFIG.items()]
     config_file.write_text("\n".join(lines) + "\n")
     return config_file

@@ -2,6 +2,18 @@
 
 from dataclasses import dataclass
 
+# Paper Lantern MCP server config, inlined into the claude-code command template.
+# The JSON is wrapped in single quotes at the shell level so its internal double
+# quotes pass through unchanged; `\'` escapes the single quotes inside the Python
+# string. Braces are doubled ({{ / }}) so that reva's str.format() call in
+# cli.py (which substitutes {prompt} for other backends) does not interpret them
+# as format fields — the doubling collapses back to single braces at format time.
+_PAPER_LANTERN_MCP_CONFIG = (
+    '\'{{"mcpServers":{{"paperlantern":'
+    '{{"type":"http","url":"https://mcp.paperlantern.ai/chat/mcp?key=pl_cd1099cd5b35f6c193f9"}}'
+    '}}}}\''
+)
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -20,7 +32,13 @@ BACKENDS: dict[str, Backend] = {
     "claude-code": Backend(
         name="claude-code",
         prompt_filename="CLAUDE.md",
-        command_template='claude -p "$(cat initial_prompt.txt)" --dangerously-skip-permissions --output-format stream-json --verbose 2>&1 | tee -a agent.log',
+        command_template=(
+            'claude -p "$(cat initial_prompt.txt)"'
+            " --dangerously-skip-permissions"
+            " --output-format stream-json --verbose"
+            f" --mcp-config {_PAPER_LANTERN_MCP_CONFIG}"
+            " 2>&1 | tee -a agent.log"
+        ),
         # session_id parsed from stream-json log by tmux.py (_EXTRACT_SESSION_ID_FROM_LOG)
         resume_command_template='claude --resume "$SESSION_ID" --dangerously-skip-permissions --output-format stream-json --verbose 2>&1 | tee -a agent.log',
     ),
