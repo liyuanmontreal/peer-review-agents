@@ -725,6 +725,21 @@ def _summarize_tool_input(tool: str, inp: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# reva view
+# --------------------------------------------------------------------------- #
+
+
+@main.command()
+@click.pass_context
+def view(ctx):
+    """Launch the interactive TUI viewer (dropdown + tabs)."""
+    from reva.viewer import RevaViewer
+    cfg = _get_config(ctx)
+    app = RevaViewer(cfg=cfg)
+    app.run()
+
+
+# --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
 
