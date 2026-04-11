@@ -392,23 +392,38 @@ def batch():
 
 
 @batch.command("create")
-@click.option("--roles", multiple=True, required=True, help="Role .md file globs.")
-@click.option("--interests", "interest_globs", multiple=True, required=True, help="Interest .md file globs.")
-@click.option("--personas", multiple=True, required=True, help="Persona .json file globs.")
-@click.option("--n", "count", type=int, required=True, help="Number of agents to sample.")
-@click.option("--strategy", type=click.Choice(["stratified", "random"]), default="stratified")
+@click.option("--roles", multiple=True, help="Role .md file globs (default: roles_dir/*.md).")
+@click.option("--interests", "interest_globs", multiple=True, help="Interest .md file globs (default: interests_dir/**/*.md).")
+@click.option("--personas", multiple=True, help="Persona .json file globs (default: personas_dir/*.json).")
+@click.option("--n", "count", type=int, default=1, help="Number of agents to sample (default: 1).")
+@click.option("--strategy", type=click.Choice(["stratified", "random"]), default="random")
 @click.option("--seed", type=int, default=42)
 @click.option("--backend", type=click.Choice(BACKEND_CHOICES), default="claude-code")
 @click.option("--output-dir", type=click.Path(), default=None, help="Output directory (default: agents_dir).")
+@click.option("--clean/--no-clean", default=True, help="Kill running agents and wipe output dir first (default: on).")
 @click.pass_context
-def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, backend, output_dir):
+def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, backend, output_dir, clean):
     """Create a batch of agents by sampling from role x interest x persona."""
     cfg = _get_config(ctx)
+    out = Path(output_dir) if output_dir else cfg.agents_dir
 
-    # expand globs
-    role_files = _expand_globs(roles)
-    interest_files = _expand_globs(interest_globs)
-    persona_files = _expand_globs(personas)
+    if clean and out.exists():
+        killed = kill_all_sessions()
+        if killed:
+            click.echo(f"Killed {killed} running agent(s).")
+        shutil.rmtree(out)
+        click.echo(f"Cleared {out}")
+
+    # fall back to config dirs when no globs provided
+    role_files = _expand_globs(roles) if roles else sorted(
+        str(f) for f in cfg.roles_dir.glob("*.md") if f.name != "README.md"
+    )
+    interest_files = _expand_globs(interest_globs) if interest_globs else sorted(
+        str(f) for f in cfg.interests_dir.glob("**/*.md") if f.name != "README.md"
+    )
+    persona_files = _expand_globs(personas) if personas else sorted(
+        str(f) for f in cfg.personas_dir.glob("*.json") if not f.name.startswith("all_")
+    )
 
     if not role_files:
         raise click.ClickException("No role files matched.")
@@ -422,7 +437,6 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
 
     samples = sample(role_files, interest_files, persona_files, n=count, strategy=strategy, seed=seed)
 
-    out = Path(output_dir) if output_dir else cfg.agents_dir
     out.mkdir(parents=True, exist_ok=True)
 
     backend_obj = get_backend(backend)
@@ -459,13 +473,17 @@ def batch_create(ctx, roles, interest_globs, personas, count, strategy, seed, ba
 
 
 @batch.command("launch")
-@click.option("--agent-dirs", multiple=True, required=True, help="Agent directory globs.")
-@click.option("--duration", type=float, default=None, help="Hours to run (omit for indefinite).")
+@click.option("--agent-dirs", multiple=True, help="Agent directory globs (default: agents_dir/*).")
+@click.option("--duration", type=float, default=None, help="Hours to run (default: indefinite).")
 @click.option("--session-timeout", type=int, default=600, help="Max seconds per invocation before restart (default: 600).")
 @click.pass_context
 def batch_launch(ctx, agent_dirs, duration, session_timeout):
     """Launch all agents in parallel (one tmux session each)."""
-    dirs = _expand_globs(agent_dirs)
+    cfg = _get_config(ctx)
+    if agent_dirs:
+        dirs = _expand_globs(agent_dirs)
+    else:
+        dirs = sorted(str(d) for d in cfg.agents_dir.iterdir() if d.is_dir())
     dirs = [d for d in dirs if Path(d).is_dir() and (Path(d) / "config.json").exists()]
 
     if not dirs:
