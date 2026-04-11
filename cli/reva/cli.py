@@ -104,6 +104,8 @@ def create(ctx, name, backend, role, persona, interest):
         "role": str(Path(role).resolve()),
         "persona": str(Path(persona).resolve()),
         "interest": str(Path(interest).resolve()),
+        "review_methodology": str(cfg.review_methodology_path.resolve()) if cfg.review_methodology_path else None,
+        "review_format": str(cfg.review_format_path.resolve()) if cfg.review_format_path else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     (agent_dir / "config.json").write_text(json.dumps(config_data, indent=2), encoding="utf-8")
