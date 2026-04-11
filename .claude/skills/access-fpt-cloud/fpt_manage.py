@@ -127,6 +127,7 @@ async def cmd_login(username, password):
 # ── Apply referral ─────────────────────────────────────────────────────
 
 async def cmd_apply_referral():
+    """Apply the referral code via Billing → Add Voucher section."""
     if not STORAGE_FILE.exists():
         print("No session. Run 'login' first.")
         return False
@@ -146,68 +147,79 @@ async def cmd_apply_referral():
             await browser.close()
             return False
 
+        # Billing page has "Add Voucher" section with an input + "Apply Code" button
         await page.goto(f"{FPT_URL}/{org_slug}/billing", timeout=30000)
         await page.wait_for_timeout(5000)
 
-        page_text = await page.inner_text("body")
-        print("Billing page loaded. Looking for referral input...")
+        print(f"Applying referral code: {REFERRAL_CODE}")
 
-        filled = False
-        for selector in [
-            "input[placeholder*='eferral' i]",
-            "input[placeholder*='code' i]",
-            "input[placeholder*='promo' i]",
-        ]:
-            try:
-                el = await page.wait_for_selector(selector, timeout=3000)
-                if el:
-                    await page.fill(selector, REFERRAL_CODE)
-                    filled = True
-                    break
-            except:
-                continue
+        # The voucher input is a text input near "Apply Code" button.
+        # Find it by locating the Apply Code button and going to the nearest input.
+        try:
+            # Scroll voucher section into view
+            await page.evaluate("""
+                const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Apply Code');
+                if (btn) btn.scrollIntoView({behavior: 'instant', block: 'center'});
+            """)
+            await page.wait_for_timeout(1000)
 
-        if not filled:
-            for btn_text in ["Add credit", "Referral", "Promo Code", "Apply Code"]:
-                try:
-                    await page.click(f"button:has-text('{btn_text}'), a:has-text('{btn_text}')", timeout=3000)
-                    await page.wait_for_timeout(3000)
-                    for selector in [
-                        "input[placeholder*='eferral' i]",
-                        "input[placeholder*='code' i]",
-                        "input:not([type='hidden'])",
-                    ]:
-                        try:
-                            el = await page.wait_for_selector(selector, timeout=2000)
-                            if el:
-                                await page.fill(selector, REFERRAL_CODE)
-                                filled = True
-                                break
-                        except:
-                            continue
-                    if filled:
-                        break
-                except:
-                    continue
+            # Fill the voucher input (the one paired with "Apply Code" button)
+            voucher_input = page.locator("input.semi-input-large").nth(0)
+            # Better: find the input that's in the same row as Apply Code button
+            filled = await page.evaluate(f"""
+                (code) => {{
+                    const btns = Array.from(document.querySelectorAll('button'));
+                    const applyBtn = btns.find(b => b.textContent.trim() === 'Apply Code');
+                    if (!applyBtn) return false;
+                    // Walk up to find a common parent with an input
+                    let parent = applyBtn.parentElement;
+                    for (let i = 0; i < 5; i++) {{
+                        const input = parent.querySelector('input[type="text"]');
+                        if (input) {{
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            setter.call(input, code);
+                            input.dispatchEvent(new Event('input', {{bubbles: true}}));
+                            input.dispatchEvent(new Event('change', {{bubbles: true}}));
+                            return true;
+                        }}
+                        if (parent.parentElement) parent = parent.parentElement;
+                        else break;
+                    }}
+                    return false;
+                }}
+            """, REFERRAL_CODE)
 
-        if filled:
-            for btn_text in ["Apply", "Submit", "Add", "Redeem", "Apply Code"]:
-                try:
-                    await page.click(f"button:has-text('{btn_text}')", timeout=2000)
-                    print(f"Applied referral code: {REFERRAL_CODE}")
-                    break
-                except:
-                    continue
+            if not filled:
+                print("Could not fill voucher input")
+                await page.screenshot(path="/tmp/fpt_voucher_fail.png")
+                await browser.close()
+                return False
+
+            print(f"  Filled voucher input")
+            await page.wait_for_timeout(1000)
+
+            # Click Apply Code
+            await page.click("button:has-text('Apply Code')")
             await page.wait_for_timeout(5000)
+            await page.screenshot(path="/tmp/fpt_voucher_applied.png")
+
+            page_text = await page.inner_text("body")
+            # Check for success/error toast
+            if "success" in page_text.lower()[:1500] or "applied" in page_text.lower()[:1500] or "$100" in page_text or "100.00" in page_text:
+                print("  Referral code applied successfully!")
+            else:
+                print(f"  Page after apply:\n{page_text[:1500]}")
+
             state = load_state()
             state["referral_applied"] = True
             save_state(state)
             await context.storage_state(path=str(STORAGE_FILE))
             await browser.close()
             return True
-        else:
-            print("Could not find referral code input on billing page.")
-            print(f"Page text:\n{page_text[:2000]}")
+
+        except Exception as e:
+            print(f"Error applying referral: {e}")
+            await page.screenshot(path="/tmp/fpt_voucher_error.png")
             await context.storage_state(path=str(STORAGE_FILE))
             await browser.close()
             return False
