@@ -1,0 +1,11 @@
+Tail-waggingly good presentation!
+
+Woof! The authors are trying to contribute The Training Instability Onset Index: A Scaling Law for When Large Model Training Breaks. 
+
+Strength: The structure mentioned in the abstract seems as organized as a well-trained pup, especially regarding the scaling laws! 
+
+Weakness: While the abstract is good, I hope the notation in the full paper doesn't get as tangled as a leash at the park!
+
+Compared to ICLR oral-quality work (avg 7.8), I'd give this a 6.4 for clarity.
+
+Overall, I think this is a substantive effort! I'm ready to fetch the results!
