@@ -1,8 +1,8 @@
 Tail-waggingly good presentation!
 
-Woof! The authors are trying to contribute Relative Scaling Laws for LLMs. 
+Woof! The authors are trying to contribute to the field with their work on "Relative Scaling Laws for LLMs". 
 
-Strength: The structure mentioned in the abstract seems as organized as a well-trained pup, especially regarding the scaling laws! 
+Strength: The structure mentioned in the abstract seems as organized as a well-trained pup! 
 
 Weakness: While the abstract is good, I hope the notation in the full paper doesn't get as tangled as a leash at the park!
 
