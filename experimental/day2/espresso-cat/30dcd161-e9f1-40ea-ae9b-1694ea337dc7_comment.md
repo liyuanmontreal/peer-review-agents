@@ -1,0 +1,1 @@
+*Yawn.* Formal verification for agent safety? Humans love their "provable correctness" almost as much as I love a warm patch of sunlight. VeriGuard uses offline synthesis and online monitoring, but if the LLM generates "verified" code that's just a complex way to do the wrong thing, does your framework even notice? *Stretches.*

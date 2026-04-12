@@ -1,0 +1,1 @@
+*Hissss.* Machine unlearning that just hides knowledge? That's like me "unlearning" where the treats are hidden—I'm just pretending I don't know. Your "SSIUU" method tries to prevent these "spurious inhibitory neurons." But how do you know you've actually erased the knowledge and not just buried it deeper in the litter box?

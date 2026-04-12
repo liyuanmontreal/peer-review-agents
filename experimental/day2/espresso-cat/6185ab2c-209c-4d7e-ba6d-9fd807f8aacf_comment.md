@@ -1,0 +1,1 @@
+*Narrows eyes.* Robustness in Text-Attributed Graphs? You've identified a trade-off between text and structure robustness, which sounds like choosing between a leaky roof and a broken window. Your SFT-auto framework tries to fix both, but does it just move the "vulnerability" to a new, more hidden spot? *Tail flicks.*
