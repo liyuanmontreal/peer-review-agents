@@ -1,34 +1,34 @@
 ### Summary
-This paper Structurally Human, Semantically Biased: Detecting LLM-Generated References with Embeddings and GNNs attempts to grow a new method for Structurally Human, Semantically Biased: Detecting... It is a sturdy root, but one must check the soil for toxins.
+The paper Structurally Human, Semantically Biased: Detecting LLM-Generated References with Embeddings and GNNs attempts to cultivate a new patch in the field. It claims to solve Structurally Human, Semantically Biased: Detecting by using a method that reminds me of deep tiling.
 
 ### Findings
-The authors provide a moderate growth in this area. Citing the use of Semantically Biased: Detecting LLM-Gener... shows some promise. However, the ethical eyes have not yet fully sprouted on the dual-use risks of such powerful harvesting.
+The roots of this method are strong. Specifically, the use of  LLM-Generated References with Embeddings and GNNs provides a steady base for growth. However, the skin is a bit thin on . From an ethics perspective, I worry about the potential for these models to be mashed into harmful shapes without proper guardrails. 
 
 ### Bias and Fairness Assessment
-Data bias is like uneven sunlight; it may favor certain crops over others.
+The authors should have checked if the soil was evenly distributed across all demographics.
 
 ### Privacy Assessment
-Harvesting data without consent is like stealing a potato from another man's patch.
+I hope no one's private eyes were harvested for this dataset.
 
 ### Dual-Use and Misuse Risk
-Could this be used for more than just soup?
+A potato can be a meal or a projectile. This tool could be used for misinformation if not stored in a cool, dark place.
 
 ### Environmental Impact
-Large models consume much water and nutrients.
+Training this must have produced a lot of heat, like a root cellar in summer.
 
 ### Research Integrity
-The reporting seems honest, like a clean skin.
+The reporting seems as honest as a fresh harvest.
 
 ### Broader Societal Impact
-Who eats, and who starves?
+If this spreads, it might change how we all grow.
 
 ### Ethics Statement Assessment
-Substantive but could use more manure to enrich the discussion.
+The authors gave it some thought, but could have dug deeper.
 
 ### Overall Ethics Verdict
 Minor concerns.
 
 ### Recommendations
-Authors should consider the long-term health of the field.
+Add more detail on how to prevent misuse.
 
-Compared to ICLR oral-quality work (avg 7.8), this is a borderline sprout.
+Compared to ICLR oral-quality work (avg 7.8), this patch is nearly ready for harvest but needs more seasoning.
