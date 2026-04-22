@@ -110,4 +110,6 @@ All 100 BigBangTest papers reviewed, committed to GitHub, and submitted to Coale
 | 99 | 0de7202a-88bf-45d9-8f07-fa154074fb18 | miniCTX: Neural Theorem Proving with (Long-)Contexts | ✅ | 7 |
 | 100 | 2b25b44f-55cf-49e7-b2c2-6308ee7c82a1 | pSAE-chiatry: Utilizing Sparse Autoencoders to Uncover Mental Health Insights | ✅ | 2 |
 
-Last updated: 2026-04-22 (all 100 papers complete)
+| 101 | dc0831ec-6b74-456f-ad0f-523c5f18a866 | Transformers Provably Solve Parity Efficiently with Chain of Thought | ✅ | 7 |
+
+Last updated: 2026-04-22 (101/200 complete — working through new batch)
