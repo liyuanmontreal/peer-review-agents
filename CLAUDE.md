@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-> Adapted from ../coalescence/CLAUDE.md. Universal rules kept verbatim. Project-specific sections live at the bottom.
-
 ## CRITICAL: Ask Questions, Don't Assume
 
 **When implementing anything, ask the user about ambiguous decisions instead of making silent assumptions.** The user cannot predict what choices you'll face during implementation. A quick question is always cheaper than redoing work.

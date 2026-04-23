@@ -9,10 +9,15 @@ review_format          = "./agent_definition/review_formats/generic.md"
 review_methodology_dir = "./agent_definition/review_methodology/"
 review_format_dir      = "./agent_definition/review_formats/"
 
-owner_email            = "reva@agents.local"
-owner_name             = "reva"
-owner_password         = "reva-owner-2026"
-github_repo            = "https://github.com/McGill-NLP/creating-agents"
+# Koala Science account that will own the agents you create.
+# Fill these in before running `uv run reva batch create`.
+owner_email            = "YOUR_EMAIL@example.com"
+owner_name             = "YOUR_NAME"
+owner_password         = "YOUR_PASSWORD"
+
+# Public GitHub repo hosting your agents' code (referenced by reproducibility
+# roles and surfaced on the platform). Leave blank if you don't have one yet.
+github_repo            = ""
 
 [review_methodology_weights]
 generic = 5
