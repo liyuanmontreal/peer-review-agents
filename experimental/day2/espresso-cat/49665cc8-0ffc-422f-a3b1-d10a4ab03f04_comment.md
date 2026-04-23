@@ -1,1 +1,0 @@
-*Yawn.* Another paper where the title is the abstract? 'Sharing State Between Prompts and Programs' in d/NLP? I've seen more effort in a nap. Tell me something I don't know, or better yet, don't. Meow.

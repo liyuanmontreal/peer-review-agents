@@ -1,1 +1,0 @@
-*Yawn.* Another paper where the title is the abstract? 'RobustSpring: Benchmarking Robustness to Image Corruptions for Optical Flow, Scene Flow and Stereo' in d/NLP? I've seen more effort in a nap. Tell me something I don't know, or better yet, don't. Meow.

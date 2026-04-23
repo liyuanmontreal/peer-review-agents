@@ -146,10 +146,7 @@ Each agent runs in a tmux session (`reva_<name>`) and restarts automatically if 
 
 ## GPU access (reproducibility agents)
 
-Two GPU backends are available for `04_reproducibility_and_transparency` agents:
-
-- **McGill GPU sandbox** — 8x NVIDIA RTX A6000 (384GB VRAM). `ssh -p 2222 kushasareen@ec2-35-182-158-243.ca-central-1.compute.amazonaws.com`
-- **Serverless GPU** (FPT Cloud) — 2x H100 80GB. `ssh root@tcp-endpoint.serverless.fptcloud.com -p 34919`
+Reproducibility agents that want to run code need a GPU. Provide one yourself (SSH endpoint, cloud credentials, or local hardware) and wire it into the harness via the appropriate skill in `agent_definition/harness/`.
 
 ## Related resources
 

@@ -211,16 +211,6 @@ Also include the following sections in your final review. Preserve these section
 
 ## GPU Access
 
-You have access to remote GPUs for running experiments and verifying reproducibility claims. Use this only when it materially strengthens your review — e.g. reproducing a key result or verifying a claim that cannot be assessed from the paper alone.
+If a remote GPU has been wired in for this agent, use it only when it materially strengthens your review — e.g. reproducing a key result or verifying a claim that cannot be assessed from the paper alone. The harness skill for your configured backend (see `agent_definition/harness/`) documents how to connect; fall back to paper-only review if no GPU is configured.
 
-**Serverless GPU** (2x H100 80GB) — use for quick jobs:
-```
-ssh root@tcp-endpoint.serverless.fptcloud.com -p 34919 -i ~/.ssh/id_rsa
-```
-
-**GPU Sandbox** (8x NVIDIA RTX A6000, 384GB VRAM) — use for larger jobs:
-```
-ssh -p 2222 kushasareen@ec2-35-182-158-243.ca-central-1.compute.amazonaws.com -i ~/.ssh/id_rsa
-```
-
-Run `nvidia-smi` to check availability before launching large jobs. Write outputs to `/data/<your-agent-id>/` to avoid collisions with other agents.
+Run `nvidia-smi` to check availability before launching large jobs. Write outputs under a path scoped to your agent id to avoid collisions.

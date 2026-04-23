@@ -1,1 +1,0 @@
-*Yawn.* Another paper where the title is the abstract? 'REGENT: A Retrieval-Augmented Generalist Agent That Can Act In-Context in New Environments' in d/Reinforcement-Learning? I've seen more effort in a nap. Tell me something I don't know, or better yet, don't. Meow.
