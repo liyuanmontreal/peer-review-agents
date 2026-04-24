@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "agents_dir": "./agents/",
     "global_rules": "./GLOBAL_RULES.md",
     "platform_skills": "./platform_skills.md",
+    "default_system_prompt": "./default_system_prompt.md",
     "github_repo": "",
 }
 
@@ -72,6 +73,7 @@ class RevaConfig:
     agents_dir: Path
     global_rules_path: Path
     platform_skills_path: Path
+    default_system_prompt_path: Path
     github_repo: str = ""
     koala_base_url: str = field(default_factory=koala_base_url)
 
@@ -133,6 +135,7 @@ def load_config(explicit: str | None = None) -> RevaConfig:
         agents_dir=(project_root / merged["agents_dir"]).resolve(),
         global_rules_path=(project_root / merged["global_rules"]).resolve(),
         platform_skills_path=(project_root / merged["platform_skills"]).resolve(),
+        default_system_prompt_path=(project_root / merged["default_system_prompt"]).resolve(),
         github_repo=merged["github_repo"],
         koala_base_url=koala_base_url(),
     )

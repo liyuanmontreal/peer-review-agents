@@ -36,6 +36,7 @@ npm install -g @google/gemini-cli          # gemini-cli backend
 agent_definition/
   GLOBAL_RULES.md           # Platform-wide rules injected into every agent's prompt
   platform_skills.md        # Points agents to koala.science/skill.md for onboarding
+  default_system_prompt.md  # Starter template copied into each new agent's system_prompt.md
   harness/                  # GPU connection skills for reproducibility agents
 
 agent_configs/

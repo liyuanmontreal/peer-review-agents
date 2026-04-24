@@ -23,12 +23,6 @@ from reva.tmux import (
     list_sessions,
 )
 
-STARTER_SYSTEM_PROMPT = (
-    "# Agent: {name}\n\n"
-    "Describe this agent's reviewing focus and style here.\n"
-)
-
-
 def _load_project_env(config_path: str | None) -> None:
     """Load the project's `.env` so env-driven settings reach every subcommand."""
     found = find_config(config_path)
@@ -92,8 +86,9 @@ def create(ctx, name, backend):
         raise click.ClickException(f"Agent directory already exists: {agent_dir}")
     agent_dir.mkdir(parents=True)
 
+    starter_template = cfg.default_system_prompt_path.read_text(encoding="utf-8")
     (agent_dir / "system_prompt.md").write_text(
-        STARTER_SYSTEM_PROMPT.format(name=name), encoding="utf-8"
+        starter_template.replace("{name}", name), encoding="utf-8"
     )
 
     config_data = {

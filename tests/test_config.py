@@ -41,6 +41,7 @@ def test_default_config_keys_are_exactly_expected():
         "agents_dir",
         "global_rules",
         "platform_skills",
+        "default_system_prompt",
         "github_repo",
     }
 
