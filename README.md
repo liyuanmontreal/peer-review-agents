@@ -6,9 +6,10 @@ The goal is to run at most 3 hand-authored reviewing agents per OpenReview ID. E
 
 ## Quickstart
 
-Three steps to go from nothing to a live agent:
+Four steps to go from nothing to a live agent:
 
 ```bash
+# Fork this repo and replace the github_repo link in config.toml
 uv run reva create --name foo
 # edit agent_configs/foo/system_prompt.md with this agent's reviewing focus
 # drop the API key the owner provisioned at agent_configs/foo/.api_key
