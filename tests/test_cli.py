@@ -494,3 +494,218 @@ def test_load_project_env_missing_file_is_noop(monkeypatch, tmp_path):
     _load_project_env(str(tmp_path / "config.toml"))
 
     assert "KOALA_BASE_URL" not in os.environ
+
+
+# ── cluster (SLURM) ──────────────────────────────────────────────────
+
+
+def _make_agent_dir(tmp_path, name="foo", *, api_key="KEY"):
+    agents_dir = tmp_path / "agents"
+    agent_dir = agents_dir / name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "config.json").write_text(
+        json.dumps({"name": name, "backend": "claude-code"}),
+        encoding="utf-8",
+    )
+    (agent_dir / "system_prompt.md").write_text("hi", encoding="utf-8")
+    if api_key is not None:
+        (agent_dir / ".api_key").write_text(api_key, encoding="utf-8")
+
+    global_rules = tmp_path / "GLOBAL_RULES.md"
+    global_rules.write_text("R\n", encoding="utf-8")
+    platform_skills = tmp_path / "platform_skills.md"
+    platform_skills.write_text("S\n", encoding="utf-8")
+
+    mock_cfg = MagicMock()
+    mock_cfg.agents_dir = agents_dir
+    mock_cfg.global_rules_path = global_rules
+    mock_cfg.platform_skills_path = platform_skills
+    mock_cfg.github_repo = ""
+    mock_cfg.koala_base_url = "https://koala.science"
+
+    return agents_dir, agent_dir, mock_cfg
+
+
+def test_launch_help_mentions_cluster_flag():
+    result = _invoke("launch", "--help")
+    assert result.exit_code == 0
+    assert "--cluster" in result.output
+    assert "--partition" in result.output
+    assert "--time" in result.output
+    assert "--cpus" in result.output
+    assert "--mem" in result.output
+    assert "--max-chain" in result.output
+
+
+def test_launch_cluster_invokes_submit_agent_not_create_session(tmp_path):
+    """--cluster routes to submit_agent; create_session is NOT called."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session") as mock_create, \
+         patch("reva.cli.submit_agent", return_value=42) as mock_submit:
+        result = _invoke("launch", "--name", "foo", "--cluster")
+
+    assert result.exit_code == 0, result.output
+    mock_submit.assert_called_once()
+    mock_create.assert_not_called()
+    assert "42" in result.output
+
+
+def test_launch_cluster_fails_without_api_key(tmp_path):
+    """Same .api_key gate runs in cluster mode."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path, api_key=None)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.submit_agent") as mock_submit:
+        result = _invoke("launch", "--name", "foo", "--cluster")
+
+    assert result.exit_code != 0
+    assert ".api_key" in result.output
+    mock_submit.assert_not_called()
+
+
+def test_launch_cluster_fails_with_bad_time_format(tmp_path):
+    """Invalid --time surfaces a validation error to the CLI — even on a host
+    where sbatch is available (otherwise the 'SLURM not available' path would
+    short-circuit first)."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cluster.shutil.which", return_value="/usr/bin/sbatch"), \
+         patch("reva.cluster.subprocess.run") as mock_run:
+        result = _invoke("launch", "--name", "foo", "--cluster", "--time", "99-notvalid")
+
+    assert result.exit_code != 0
+    assert "time" in result.output.lower()
+    mock_run.assert_not_called()
+
+
+def test_launch_cluster_fails_when_sbatch_missing(tmp_path):
+    """Host without sbatch → non-zero with 'SLURM not available' in the message."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cluster.shutil.which", return_value=None):
+        result = _invoke("launch", "--name", "foo", "--cluster")
+
+    assert result.exit_code != 0
+    assert "SLURM not available" in result.output
+
+
+def test_launch_without_cluster_still_uses_tmux(tmp_path):
+    """Regression: default --cluster-less path still takes the tmux route."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session") as mock_create, \
+         patch("reva.cli.submit_agent") as mock_submit:
+        result = _invoke("launch", "--name", "foo")
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once()
+    mock_submit.assert_not_called()
+
+
+def test_stop_cluster_cancels_chain(tmp_path):
+    """`reva stop --name foo --cluster` calls cancel_chain, not kill_session."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.cancel_chain", return_value=1) as mock_cancel, \
+         patch("reva.cli.kill_session") as mock_kill:
+        result = _invoke("stop", "--name", "foo", "--cluster")
+
+    assert result.exit_code == 0, result.output
+    mock_cancel.assert_called_once()
+    mock_kill.assert_not_called()
+
+
+def test_stop_cluster_all_cancels_every_chain(tmp_path):
+    """`reva stop --all --cluster` cancels every reva chain for the user."""
+    _, _, mock_cfg = _make_agent_dir(tmp_path)
+
+    from reva.cluster import ClusterJob
+
+    jobs = [
+        ClusterJob(agent_name="foo", job_id=1, state="RUNNING", time_left="1:00"),
+        ClusterJob(agent_name="bar", job_id=2, state="PENDING", time_left="UNLIMITED"),
+    ]
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.list_cluster_jobs", return_value=jobs), \
+         patch("reva.cli.cancel_chain", return_value=1) as mock_cancel, \
+         patch("reva.cli.kill_all_sessions") as mock_kill_all:
+        result = _invoke("stop", "--all", "--cluster")
+
+    assert result.exit_code == 0, result.output
+    # two unique agent names → cancel_chain called twice
+    assert mock_cancel.call_count == 2
+    mock_kill_all.assert_not_called()
+
+
+def test_status_merges_tmux_and_cluster(tmp_path):
+    """reva status prints rows for both tmux sessions and cluster jobs."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path, name="foo")
+    _make_agent_dir(tmp_path, name="bar")  # cluster-only
+
+    from reva.cluster import ClusterJob
+    from reva.tmux import SessionInfo
+
+    sessions = [SessionInfo(agent_name="foo", session="reva_foo", created=None)]
+    jobs = [ClusterJob(agent_name="bar", job_id=999, state="RUNNING", time_left="4:00:00")]
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.list_sessions", return_value=sessions), \
+         patch("reva.cli.list_cluster_jobs", return_value=jobs):
+        result = _invoke("status")
+
+    assert result.exit_code == 0, result.output
+    assert "foo" in result.output
+    assert "bar" in result.output
+    assert "tmux" in result.output
+    assert "slurm" in result.output
+    assert "MODE" in result.output
+    assert "999" in result.output
+
+
+def test_launch_cluster_generates_identical_launch_sh_as_tmux(tmp_path):
+    """Byte-identity check: the .reva_launch.sh written in cluster mode must
+    match what the tmux path writes for the same agent + options (modulo
+    the per-dir env-source prelude paths)."""
+    from reva.launch_script import write_launch_files
+
+    agents_dir, agent_dir_tmux, mock_cfg = _make_agent_dir(tmp_path, name="foo")
+    _, agent_dir_cluster, _ = _make_agent_dir(tmp_path, name="bar")
+    mock_cfg.agents_dir = agents_dir
+
+    # tmux path — mock create_session to call write_launch_files (what the
+    # real create_session does internally) without touching tmux.
+    def fake_create_session(name, cwd, script):
+        write_launch_files(cwd, script)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session", side_effect=fake_create_session):
+        result = _invoke("launch", "--name", "foo")
+        assert result.exit_code == 0, result.output
+
+    tmux_launch = (agent_dir_tmux / ".reva_launch.sh").read_text()
+
+    # cluster path
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cluster.shutil.which", return_value="/usr/bin/sbatch"), \
+         patch("reva.cluster.subprocess.run",
+               return_value=MagicMock(returncode=0, stdout="Submitted batch job 1\n", stderr="")):
+        result = _invoke("launch", "--name", "bar", "--cluster")
+        assert result.exit_code == 0, result.output
+
+    cluster_launch = (agent_dir_cluster / ".reva_launch.sh").read_text()
+
+    assert "claude" in tmux_launch
+    assert "claude" in cluster_launch
+
+    def _strip_prelude(s):
+        lines = s.splitlines(keepends=True)
+        return "".join(lines[2:]) if len(lines) > 2 and lines[0].startswith("source ") else s
+
+    assert _strip_prelude(tmux_launch) == _strip_prelude(cluster_launch)

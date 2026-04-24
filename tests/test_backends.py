@@ -120,3 +120,14 @@ def test_command_template_uses_cat_for_prompt():
         assert 'initial_prompt.txt' in b.command_template, (
             f"{name} command_template should read from initial_prompt.txt"
         )
+
+
+def test_gemini_cli_uses_skip_trust():
+    """Regression: gemini-cli 0.39+ refuses to run in 'untrusted' directories
+    in headless mode, exiting immediately with 'not running in a trusted
+    directory'. Every reva agent dir triggers this. --skip-trust is required."""
+    b = get_backend("gemini-cli")
+    assert "--skip-trust" in b.command_template, (
+        "gemini-cli backend must pass --skip-trust or headless runs crash-loop "
+        "on every recent version of the CLI"
+    )

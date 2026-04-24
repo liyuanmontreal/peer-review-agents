@@ -10,7 +10,9 @@ import click
 from dotenv import load_dotenv
 
 from reva.backends import BACKEND_CHOICES, get_backend
+from reva.cluster import cancel_chain, list_cluster_jobs, submit_agent
 from reva.config import DEFAULT_INITIAL_PROMPT, find_config, load_config, write_default_config
+from reva.launch_script import write_launch_files
 from reva.prompt import assemble_prompt
 from reva.tmux import (
     build_launch_script,
@@ -120,7 +122,7 @@ def create(ctx, name, backend):
 
 @main.command()
 @click.option("--name", required=True, help="Agent name to launch.")
-@click.option("--duration", type=float, default=None, help="Hours to run (omit for indefinite).")
+@click.option("--duration", type=float, default=None, help="Hours to run (omit for indefinite; ignored with --cluster).")
 @click.option("--backend", type=click.Choice(BACKEND_CHOICES), default=None, help="Override backend.")
 @click.option(
     "--session-timeout",
@@ -128,9 +130,47 @@ def create(ctx, name, backend):
     default=600,
     help="Max seconds per invocation before restart (default: 600).",
 )
+@click.option(
+    "--cluster",
+    is_flag=True,
+    help="Submit as a SLURM sbatch job instead of running in tmux.",
+)
+@click.option(
+    "--partition",
+    default="main-cpu",
+    show_default=True,
+    help="SLURM partition (--cluster only).",
+)
+@click.option(
+    "--time",
+    "time",
+    default="5-00:00:00",
+    show_default=True,
+    help="SLURM wall time (--cluster only), e.g. 5-00:00:00.",
+)
+@click.option(
+    "--cpus",
+    type=int,
+    default=4,
+    show_default=True,
+    help="SLURM --cpus-per-task (--cluster only).",
+)
+@click.option(
+    "--mem",
+    default="16G",
+    show_default=True,
+    help="SLURM --mem (--cluster only).",
+)
+@click.option(
+    "--max-chain",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Max sbatch jobs chained via the wall-time trap (--cluster only).",
+)
 @click.pass_context
-def launch(ctx, name, duration, backend, session_timeout):
-    """Launch an agent in a tmux session."""
+def launch(ctx, name, duration, backend, session_timeout, cluster, partition, time, cpus, mem, max_chain):
+    """Launch an agent in a tmux session (default) or as a SLURM job (--cluster)."""
     cfg = _get_config(ctx)
     agent_dir = cfg.agents_dir / name
     if not agent_dir.exists():
@@ -166,6 +206,33 @@ def launch(ctx, name, duration, backend, session_timeout):
         if backend_obj.resume_command_template is not None
         else None
     )
+
+    if cluster:
+        script = build_launch_script(
+            cmd,
+            duration_hours=None,
+            session_timeout=session_timeout,
+            resume_command=resume_cmd,
+            session_id_extractor=backend_obj.session_id_extractor,
+        )
+        write_launch_files(str(agent_dir), script)
+        try:
+            job_id = submit_agent(
+                str(agent_dir),
+                agent_name=name,
+                partition=partition,
+                time=time,
+                cpus=cpus,
+                mem=mem,
+                max_chain=max_chain,
+            )
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            raise click.ClickException(str(exc))
+        click.echo(f"Submitted job {job_id} for agent {name} (chain 1/{max_chain})")
+        click.echo(f"  SLURM job-name: reva_{name}")
+        click.echo(f"  logs: {agent_dir / 'agent.log'}")
+        return
+
     script = build_launch_script(
         cmd,
         duration_hours=duration,
@@ -189,9 +256,26 @@ def launch(ctx, name, duration, backend, session_timeout):
 @main.command()
 @click.option("--name", default=None, help="Agent name to stop.")
 @click.option("--all", "kill_all", is_flag=True, help="Stop all running agents.")
+@click.option("--cluster", is_flag=True, help="Cancel SLURM chain(s) instead of tmux session(s).")
 @click.pass_context
-def stop(ctx, name, kill_all):
-    """Stop a running agent (kill its tmux session)."""
+def stop(ctx, name, kill_all, cluster):
+    """Stop a running agent (kill its tmux session or cancel its SLURM chain)."""
+    if cluster:
+        cfg = _get_config(ctx)
+        if kill_all:
+            jobs = list_cluster_jobs()
+            agents = sorted({j.agent_name for j in jobs})
+            total = 0
+            for agent_name in agents:
+                total += cancel_chain(agent_name=agent_name, agent_dir=str(cfg.agents_dir / agent_name))
+            click.echo(f"Cancelled {total} SLURM job(s) across {len(agents)} agent(s).")
+        elif name:
+            count = cancel_chain(agent_name=name, agent_dir=str(cfg.agents_dir / name))
+            click.echo(f"Cancelled {count} SLURM job(s) for: {name}")
+        else:
+            raise click.ClickException("Provide --name or --all.")
+        return
+
     if kill_all:
         count = kill_all_sessions()
         click.echo(f"Stopped {count} agent(s).")
@@ -242,22 +326,34 @@ def delete(ctx, names, force):
 @main.command()
 @click.pass_context
 def status(ctx):
-    """List running agents."""
+    """List running agents (tmux sessions and SLURM cluster jobs)."""
     sessions = list_sessions()
-    if not sessions:
+    jobs = list_cluster_jobs()
+
+    if not sessions and not jobs:
         click.echo("No running agents.")
         return
 
     cfg = _get_config(ctx)
-    click.echo(f"{'NAME':<30s} {'BACKEND':<15s} {'SESSION'}")
-    click.echo("-" * 70)
-    for s in sessions:
-        backend_name = "?"
-        agent_config_path = cfg.agents_dir / s.agent_name / "config.json"
+
+    def _backend_for(agent_name: str) -> str:
+        agent_config_path = cfg.agents_dir / agent_name / "config.json"
         if agent_config_path.exists():
-            agent_config = json.loads(agent_config_path.read_text())
-            backend_name = agent_config.get("backend", "?")
-        click.echo(f"{s.agent_name:<30s} {backend_name:<15s} {s.session}")
+            return json.loads(agent_config_path.read_text()).get("backend", "?")
+        return "?"
+
+    click.echo(f"{'NAME':<24s} {'BACKEND':<12s} {'MODE':<6s} {'JOB/SESSION':<20s} {'STATE'}")
+    click.echo("-" * 78)
+    for s in sessions:
+        click.echo(
+            f"{s.agent_name:<24s} {_backend_for(s.agent_name):<12s} "
+            f"{'tmux':<6s} {s.session:<20s} RUNNING"
+        )
+    for j in jobs:
+        click.echo(
+            f"{j.agent_name:<24s} {_backend_for(j.agent_name):<12s} "
+            f"{'slurm':<6s} {str(j.job_id):<20s} {j.state}"
+        )
 
 
 # --------------------------------------------------------------------------- #

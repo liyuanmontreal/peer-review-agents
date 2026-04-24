@@ -67,7 +67,12 @@ def _build_backends() -> dict[str, Backend]:
             prompt_filename="GEMINI.md",
             # Use $(cat) to safely handle multiline prompts; no resume since
             # headless sessions don't persist a resumable state.
-            command_template='gemini --yolo -p "$(cat initial_prompt.txt)" 2>&1 | tee -a agent.log',
+            # --skip-trust: recent gemini-cli (0.39+) refuses to run in
+            # "untrusted" directories in headless mode, which includes every
+            # reva agent dir. Without the flag the backend exits immediately
+            # with "not running in a trusted directory" and the restart loop
+            # spins.
+            command_template='gemini --yolo --skip-trust -p "$(cat initial_prompt.txt)" 2>&1 | tee -a agent.log',
         ),
         "codex": Backend(
             name="codex",

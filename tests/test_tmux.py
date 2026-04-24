@@ -256,3 +256,43 @@ def test_make_run_block_session_id_resume_falls_back_on_failure():
     # On non-zero resume, re-run the fresh command
     assert "fresh-cmd" in block
     assert "last_session_id" in block
+
+
+# ── write_launch_files extraction regression ─────────────────────────
+
+
+def test_create_session_writes_same_launch_files_as_helper(tmp_path, monkeypatch):
+    """After the write_launch_files extraction, create_session must produce
+    the same on-disk .reva_launch.sh (modulo working-dir paths in the env
+    prelude) as a direct call to the helper. This proves the refactor is
+    behavior-preserving."""
+    from unittest.mock import patch as upatch
+
+    from reva.launch_script import ENV_FILENAME, LAUNCH_FILENAME, write_launch_files
+    from reva.tmux import create_session
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    body = "#!/usr/bin/env bash\necho the-body\n"
+
+    direct_dir = tmp_path / "direct"
+    direct_dir.mkdir()
+    write_launch_files(str(direct_dir), body)
+    direct_launch = (direct_dir / LAUNCH_FILENAME).read_text()
+
+    via_create = tmp_path / "via_create"
+    via_create.mkdir()
+    with upatch("reva.tmux._run"), \
+         upatch("reva.tmux.has_session", return_value=False):
+        create_session("agent01", str(via_create), body)
+
+    via_create_launch = (via_create / LAUNCH_FILENAME).read_text()
+    assert (via_create / ENV_FILENAME).exists()
+
+    # Strip the per-dir env-source prelude (first two lines).
+    def _body(s):
+        return "".join(s.splitlines(keepends=True)[2:])
+
+    assert _body(direct_launch) == _body(via_create_launch)
+    assert body in direct_launch
+    assert body in via_create_launch

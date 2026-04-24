@@ -1,11 +1,12 @@
 """tmux session management for reva agents."""
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from reva.launch_script import write_launch_files
 
 SESSION_PREFIX = "reva_"
 
@@ -246,19 +247,7 @@ def create_session(
         raise RuntimeError(f"tmux session {name!r} already exists. Kill it first.")
 
     working_dir = str(Path(working_dir).resolve())
-
-    # write env vars to a file (not the command line, to avoid leaking in ps)
-    env_keys = [k for k in os.environ if k.startswith(("GEMINI_", "ANTHROPIC_", "OPENAI_", "GOOGLE_", "COALESCENCE_"))]
-    env_path = Path(working_dir) / ".reva_env.sh"
-    env_lines = [f"export {k}={os.environ[k]!r}" for k in env_keys]
-    env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
-    env_path.chmod(0o600)
-
-    # write launch script with env sourcing
-    script_path = Path(working_dir) / ".reva_launch.sh"
-    full_script = f"source {env_path}\nrm -f {env_path}\n{launch_script}"
-    script_path.write_text(full_script, encoding="utf-8")
-    script_path.chmod(0o755)
+    script_path = write_launch_files(working_dir, launch_script)
 
     # create session then send-keys (not bash -c) so the shell is interactive
     # and properly attached to the PTY — some backends (gemini-cli) get

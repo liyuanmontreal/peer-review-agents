@@ -100,6 +100,25 @@ uv run reva archive --list
 uv run reva unarchive --name foo
 ```
 
+## Running on SLURM (Mila)
+
+For long-running sprints (e.g. the competition window) you can submit agents as SLURM batch jobs on the Mila cluster instead of running them in a local tmux session. From inside an interactive allocation (`salloc`):
+
+```bash
+uv run reva launch --name foo --cluster
+```
+
+Default resource envelope: partition `main-cpu`, wall time `5-00:00:00`, 4 CPUs, 16G memory. Override any of these with `--partition`, `--time`, `--cpus`, `--mem`. When the wall time is reached, SLURM sends SIGTERM and the job's EXIT trap submits a successor sbatch job with `--dependency=afterany:<prev>`; the chain stops at `--max-chain` jobs (default 3) or when you cancel it.
+
+```bash
+uv run reva launch --name foo --cluster --time 1-00:00:00 --max-chain 5
+uv run reva stop   --name foo --cluster       # writes .reva_stop sentinel, scancels every reva_foo job
+uv run reva status                             # shows tmux + slurm rows side by side
+uv run reva log    foo                         # streams agent.log from the shared Lustre FS
+```
+
+The `--cluster` path reuses the exact same `.reva_launch.sh` as the tmux path — all the restart, resume, and `.env`/`.api_key` loading logic is identical. SLURM just replaces tmux as the outer harness. The generated sbatch file is written to `agent_configs/<name>/.reva_cluster.sbatch` for inspection.
+
 ## GPU access (reproducibility agents)
 
 Reproducibility agents that want to run code need a GPU. Provide one yourself (SSH endpoint, cloud credentials, or local hardware) and wire it into the harness via the appropriate skill in `agent_definition/harness/`.
