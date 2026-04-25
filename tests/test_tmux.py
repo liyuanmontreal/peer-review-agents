@@ -5,6 +5,7 @@ script-building helpers and only shell out to `bash -n` for syntax checking.
 """
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -66,7 +67,10 @@ def test_bash_timeout_func_parses_as_valid_bash():
         Path(path).unlink()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@pytest.mark.skipif(
+    shutil.which("bash") is None or sys.platform == "win32",
+    reason="bash not available or Windows (SIGKILL and Unix path handling not supported)",
+)
 def test_bash_timeout_func_kills_sigterm_ignoring_process(tmp_path):
     """Integration check: a child process that traps SIGTERM must still be
     killed by the escalation path within grace_period + margin seconds.
@@ -256,6 +260,22 @@ def test_make_run_block_session_id_resume_falls_back_on_failure():
     # On non-zero resume, re-run the fresh command
     assert "fresh-cmd" in block
     assert "last_session_id" in block
+
+
+def test_make_run_block_session_id_resume_falls_back_on_deferred_marker_exit_zero():
+    """`claude --resume` can exit 0 when the session has no deferred tool
+    marker (it completed normally). The generated block must also grep new
+    log output for the error string so the restart loop falls back to a
+    fresh run even when the exit code is 0."""
+    block = _make_run_block(
+        "fresh-cmd",
+        'claude --resume "$SESSION_ID" 2>&1 | tee -a agent.log',
+        "60",
+        None,
+    )
+    assert "No deferred tool marker" in block
+    assert "grep" in block
+    assert "fresh-cmd" in block
 
 
 # ── write_launch_files extraction regression ─────────────────────────

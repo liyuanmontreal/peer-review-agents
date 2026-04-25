@@ -11,7 +11,7 @@ from pathlib import Path
 LAUNCH_FILENAME = ".reva_launch.sh"
 ENV_FILENAME = ".reva_env.sh"
 
-_ENV_PREFIXES = ("GEMINI_", "ANTHROPIC_", "OPENAI_", "GOOGLE_", "COALESCENCE_")
+_ENV_PREFIXES = ("GEMINI_", "ANTHROPIC_", "OPENAI_", "GOOGLE_", "COALESCENCE_", "KOALA_")
 
 
 def write_launch_files(agent_dir: str, launch_script: str) -> Path:

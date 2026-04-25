@@ -114,6 +114,12 @@ def test_launch_help_lists_required_options():
     assert "--session-timeout" in result.output
 
 
+def test_launch_help_lists_foreground_option():
+    result = _invoke("launch", "--help")
+    assert result.exit_code == 0
+    assert "--foreground" in result.output
+
+
 def test_stop_help():
     result = _invoke("stop", "--help")
     assert result.exit_code == 0
@@ -644,6 +650,106 @@ def test_launch_without_cluster_still_uses_tmux(tmp_path):
     mock_submit.assert_not_called()
 
 
+# ── foreground mode ───────────────────────────────────────────────────────────
+
+
+def test_launch_foreground_uses_run_foreground_not_create_session(tmp_path):
+    """--foreground routes to run_foreground; create_session must not be called."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session") as mock_create, \
+         patch("reva.cli.run_foreground") as mock_fg:
+        result = _invoke("launch", "--name", "foo", "--foreground")
+
+    assert result.exit_code == 0, result.output
+    mock_fg.assert_called_once()
+    mock_create.assert_not_called()
+
+
+def test_launch_default_still_uses_tmux_not_foreground(tmp_path):
+    """Regression: default path (no --foreground) still uses tmux."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session") as mock_create, \
+         patch("reva.cli.run_foreground") as mock_fg:
+        result = _invoke("launch", "--name", "foo")
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once()
+    mock_fg.assert_not_called()
+
+
+def test_launch_foreground_and_cluster_are_mutually_exclusive(tmp_path):
+    """--foreground and --cluster cannot be combined."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"), \
+         patch("reva.cli.run_foreground"):
+        result = _invoke("launch", "--name", "foo", "--foreground", "--cluster")
+
+    assert result.exit_code != 0
+
+
+def test_launch_foreground_output_mentions_ctrl_c(tmp_path):
+    """Foreground launch should tell the user how to stop the agent."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.run_foreground"):
+        result = _invoke("launch", "--name", "foo", "--foreground")
+
+    assert result.exit_code == 0, result.output
+    assert "Ctrl-C" in result.output or "ctrl-c" in result.output.lower()
+
+
+def test_launch_help_mentions_fresh_option():
+    result = _invoke("launch", "--help")
+    assert result.exit_code == 0
+    assert "--fresh" in result.output
+
+
+def test_launch_fresh_clears_session_id_file_before_tmux(tmp_path):
+    """--fresh deletes last_session_id before the tmux session starts."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+    session_file = agent_dir / "last_session_id"
+    session_file.write_text("stale-id")
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "foo", "--fresh")
+
+    assert result.exit_code == 0, result.output
+    assert not session_file.exists()
+
+
+def test_launch_fresh_clears_session_id_file_before_foreground(tmp_path):
+    """--fresh with --foreground also deletes last_session_id."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+    session_file = agent_dir / "last_session_id"
+    session_file.write_text("stale-id")
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.run_foreground"):
+        result = _invoke("launch", "--name", "foo", "--foreground", "--fresh")
+
+    assert result.exit_code == 0, result.output
+    assert not session_file.exists()
+
+
+def test_launch_fresh_no_error_when_no_session_id_file(tmp_path):
+    """--fresh succeeds silently when last_session_id doesn't exist."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "foo", "--fresh")
+
+    assert result.exit_code == 0, result.output
+
+
 def test_stop_cluster_cancels_chain(tmp_path):
     """`reva stop --name foo --cluster` calls cancel_chain, not kill_session."""
     _, agent_dir, mock_cfg = _make_agent_dir(tmp_path)
@@ -704,6 +810,135 @@ def test_status_merges_tmux_and_cluster(tmp_path):
     assert "slurm" in result.output
     assert "MODE" in result.output
     assert "999" in result.output
+
+
+# ── smoke artifact on gsr_agent launch ───────────────────────────────────────
+
+
+def _make_gsr_agent_dir(tmp_path):
+    return _make_agent_dir(tmp_path, name="gsr_agent")
+
+
+def test_launch_gsr_agent_creates_smoke_artifact(tmp_path):
+    """reva launch --name gsr_agent creates the smoke artifact before starting."""
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "gsr_agent")
+        assert result.exit_code == 0, result.output
+
+    smoke = agent_dir / "reviews" / "smoke_test" / "paper_smoke_test_summary.md"
+    assert smoke.exists()
+
+
+def test_launch_gsr_agent_smoke_artifact_has_required_fields(tmp_path):
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        _invoke("launch", "--name", "gsr_agent")
+
+    text = (agent_dir / "reviews" / "smoke_test" / "paper_smoke_test_summary.md").read_text()
+    assert "gsr_agent" in text
+    assert "timestamp" in text
+    assert "smoke" in text.lower()
+    assert "no Koala post" in text
+
+
+def test_launch_non_gsr_agent_does_not_create_smoke_artifact(tmp_path):
+    """Smoke artifact must only appear for gsr_agent, not other agents."""
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path, name="other_agent")
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "other_agent")
+        assert result.exit_code == 0, result.output
+
+    smoke = agent_dir / "reviews" / "smoke_test" / "paper_smoke_test_summary.md"
+    assert not smoke.exists()
+
+
+def test_launch_gsr_agent_smoke_artifact_created_in_foreground_mode(tmp_path):
+    """Smoke artifact is written regardless of launch mode (foreground path)."""
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.run_foreground"):
+        result = _invoke("launch", "--name", "gsr_agent", "--foreground")
+        assert result.exit_code == 0, result.output
+
+    smoke = agent_dir / "reviews" / "smoke_test" / "paper_smoke_test_summary.md"
+    assert smoke.exists()
+
+
+def test_launch_gsr_agent_creates_local_artifact_smoke_dir(tmp_path):
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "gsr_agent")
+        assert result.exit_code == 0, result.output
+    smoke_dir = agent_dir / "reviews" / "local_artifact_smoke"
+    assert smoke_dir.is_dir()
+
+
+def test_launch_gsr_agent_creates_local_artifact_summary(tmp_path):
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        _invoke("launch", "--name", "gsr_agent")
+    summary = agent_dir / "reviews" / "local_artifact_smoke" / "paper_local_artifact_smoke_summary.md"
+    assert summary.exists()
+    text = summary.read_text()
+    assert "local" in text.lower()
+    assert "no Koala" in text
+
+
+def test_launch_gsr_agent_creates_local_artifact_comment_draft(tmp_path):
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        _invoke("launch", "--name", "gsr_agent")
+    drafts = list((agent_dir / "reviews" / "local_artifact_smoke").glob("comment_draft_local_artifact_smoke_*.md"))
+    assert len(drafts) == 1
+    assert "Local artifact smoke test only; no Koala comment was attempted." in drafts[0].read_text()
+
+
+def test_launch_gsr_agent_creates_local_artifact_comment_trace(tmp_path):
+    import json as _json
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        _invoke("launch", "--name", "gsr_agent")
+    traces = list((agent_dir / "reviews" / "local_artifact_smoke").glob("comment_trace_local_artifact_smoke_*.json"))
+    assert len(traces) == 1
+    data = _json.loads(traces[0].read_text())
+    assert data["artifact_kind"] == "comment_trace"
+    assert data["paper_id"] == "local_artifact_smoke"
+    assert data["source_phase"] == "review"
+    assert "summary" in data
+    assert "payload" in data
+    assert data["payload"]["action_type"] == "local_smoke"
+    assert data["payload"]["safe_mode"] is True
+
+
+def test_launch_non_gsr_agent_does_not_create_local_artifact_smoke(tmp_path):
+    _, agent_dir, mock_cfg = _make_agent_dir(tmp_path, name="other_agent")
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.create_session"):
+        result = _invoke("launch", "--name", "other_agent")
+        assert result.exit_code == 0, result.output
+    assert not (agent_dir / "reviews" / "local_artifact_smoke").exists()
+
+
+def test_launch_gsr_agent_local_artifact_smoke_created_in_foreground_mode(tmp_path):
+    _, agent_dir, mock_cfg = _make_gsr_agent_dir(tmp_path)
+    with patch("reva.cli._get_config", return_value=mock_cfg), \
+         patch("reva.cli.run_foreground"):
+        result = _invoke("launch", "--name", "gsr_agent", "--foreground")
+        assert result.exit_code == 0, result.output
+    summary = agent_dir / "reviews" / "local_artifact_smoke" / "paper_local_artifact_smoke_summary.md"
+    assert summary.exists()
 
 
 def test_launch_cluster_generates_identical_launch_sh_as_tmux(tmp_path):

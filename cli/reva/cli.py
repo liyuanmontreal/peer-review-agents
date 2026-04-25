@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from reva.backends import BACKEND_CHOICES, get_backend
 from reva.cluster import cancel_chain, list_cluster_jobs, submit_agent
 from reva.config import DEFAULT_INITIAL_PROMPT, find_config, load_config, write_default_config
+from reva.foreground import run_foreground
 from reva.launch_script import write_launch_files
 from reva.prompt import assemble_prompt
 from reva.tmux import (
@@ -126,6 +127,21 @@ def create(ctx, name, backend):
     help="Max seconds per invocation before restart (default: 600).",
 )
 @click.option(
+    "--foreground",
+    is_flag=True,
+    help="Run directly in the current terminal instead of a tmux session. Windows-compatible.",
+)
+@click.option(
+    "--fresh",
+    is_flag=True,
+    help=(
+        "Clear saved session state (last_session_id) and force a new session. "
+        "Use when a previous run left a stale session that cannot be resumed, "
+        "e.g. 'No deferred tool marker found'. "
+        "To clear manually: rm agent_configs/<name>/last_session_id"
+    ),
+)
+@click.option(
     "--cluster",
     is_flag=True,
     help="Submit as a SLURM sbatch job instead of running in tmux.",
@@ -164,8 +180,11 @@ def create(ctx, name, backend):
     help="Max sbatch jobs chained via the wall-time trap (--cluster only).",
 )
 @click.pass_context
-def launch(ctx, name, duration, backend, session_timeout, cluster, partition, time, cpus, mem, max_chain):
-    """Launch an agent in a tmux session (default) or as a SLURM job (--cluster)."""
+def launch(ctx, name, duration, backend, session_timeout, foreground, fresh, cluster, partition, time, cpus, mem, max_chain):
+    """Launch an agent in a tmux session (default), current terminal (--foreground), or SLURM job (--cluster)."""
+    if foreground and cluster:
+        raise click.ClickException("--foreground and --cluster are mutually exclusive.")
+
     cfg = _get_config(ctx)
     agent_dir = cfg.agents_dir / name
     if not agent_dir.exists():
@@ -177,6 +196,10 @@ def launch(ctx, name, duration, backend, session_timeout, cluster, partition, ti
             f".api_key missing — ask the owner to provision it at "
             f"{cfg.koala_base_url}/owners and drop the key at {api_key_path}"
         )
+
+    if fresh:
+        session_id_file = agent_dir / "last_session_id"
+        session_id_file.unlink(missing_ok=True)
 
     agent_config = json.loads((agent_dir / "config.json").read_text())
     backend_name = backend or agent_config["backend"]
@@ -192,6 +215,84 @@ def launch(ctx, name, duration, backend, session_timeout, cluster, partition, ti
 
     initial_prompt = DEFAULT_INITIAL_PROMPT.format(koala_base_url=cfg.koala_base_url)
     (agent_dir / "initial_prompt.txt").write_text(initial_prompt, encoding="utf-8")
+
+    if name == "gsr_agent":
+        _smoke_dir = agent_dir / "reviews" / "smoke_test"
+        _smoke_dir.mkdir(parents=True, exist_ok=True)
+        (_smoke_dir / "paper_smoke_test_summary.md").write_text(
+            "\n".join([
+                "# Smoke Artifact: startup verification",
+                "",
+                f"- **timestamp**: {datetime.now(timezone.utc).isoformat()}",
+                f"- **agent_name**: {name}",
+                "- **purpose**: local smoke artifact — verifies artifact creation path only",
+                "- **koala_post**: no Koala post attempted",
+            ]),
+            encoding="utf-8",
+        )
+        _local_smoke_dir = agent_dir / "reviews" / "local_artifact_smoke"
+        _local_smoke_dir.mkdir(parents=True, exist_ok=True)
+        _now = datetime.now(timezone.utc)
+        _sid = _now.strftime("%Y%m%dT%H%M%SZ")
+        _ts = _now.isoformat()
+        _placeholder = "Local artifact smoke test only; no Koala comment was attempted."
+        (_local_smoke_dir / "paper_local_artifact_smoke_summary.md").write_text(
+            "\n".join([
+                "# GSR Artifact: paper_summary",
+                "",
+                "- **artifact_kind**: paper_summary",
+                "- **paper_id**: local_artifact_smoke",
+                f"- **created_at**: {_ts}",
+                "- **source_phase**: review",
+                "",
+                "**Summary:** Local-only smoke artifact — no Koala comment was attempted.",
+                "",
+                "## Content",
+                "",
+                "Local-only smoke artifact. Verifies the realistic comment artifact format.",
+                "",
+                "- **local_only**: true",
+                "- **karma_consumed**: none",
+                f"- **agent_name**: {name}",
+                "- **note**: no Koala post_comment or post_verdict was called",
+            ]),
+            encoding="utf-8",
+        )
+        (_local_smoke_dir / f"comment_draft_local_artifact_smoke_{_sid}.md").write_text(
+            "\n".join([
+                "# GSR Artifact: comment_draft",
+                "",
+                "- **artifact_kind**: comment_draft",
+                "- **paper_id**: local_artifact_smoke",
+                f"- **created_at**: {_ts}",
+                "- **source_phase**: review",
+                "",
+                f"**Summary:** {_placeholder}",
+                "",
+                "## Content",
+                "",
+                _placeholder,
+            ]),
+            encoding="utf-8",
+        )
+        (_local_smoke_dir / f"comment_trace_local_artifact_smoke_{_sid}.json").write_text(
+            json.dumps({
+                "artifact_kind": "comment_trace",
+                "paper_id": "local_artifact_smoke",
+                "created_at": _ts,
+                "source_phase": "review",
+                "summary": _placeholder,
+                "payload": {
+                    "action_type": "local_smoke",
+                    "paper_id": "local_artifact_smoke",
+                    "safe_mode": True,
+                    "local_only": True,
+                    "note": "no post_comment called; no karma consumed",
+                    "agent_name": name,
+                },
+            }, indent=2),
+            encoding="utf-8",
+        )
 
     escaped_prompt = initial_prompt.replace('"', '\\"')
     cmd = backend_obj.command_template.format(prompt=escaped_prompt)
@@ -235,6 +336,19 @@ def launch(ctx, name, duration, backend, session_timeout, cluster, partition, ti
         resume_command=resume_cmd,
         session_id_extractor=backend_obj.session_id_extractor,
     )
+
+    if foreground:
+        dur_str = f"{duration}h" if duration else "indefinite"
+        click.echo(f"Launching: {name} ({backend_name}, {dur_str}, foreground)")
+        click.echo("  Press Ctrl-C to stop.")
+        try:
+            run_foreground(name, str(agent_dir), script)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc))
+        except KeyboardInterrupt:
+            click.echo("\nStopped.")
+        return
+
     create_session(name, str(agent_dir), script)
 
     dur_str = f"{duration}h" if duration else "indefinite"

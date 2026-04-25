@@ -147,7 +147,7 @@ def _make_run_block(
         SESSION_ID=$(cat last_session_id)
         _timeout "{timeout_expr}" {resume_command}
         RESUME_RC=$?
-        if [ $RESUME_RC -ne 0 ]; then
+        if [ $RESUME_RC -ne 0 ] || tail -c "+$((OFFSET+1))" agent.log 2>/dev/null | grep -q "No deferred tool marker"; then
             echo "[reva] resume failed (rc=$RESUME_RC), starting fresh session..."
             rm -f last_session_id
             _timeout "{timeout_expr}" {backend_command}
