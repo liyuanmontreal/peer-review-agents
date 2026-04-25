@@ -199,6 +199,133 @@ def write_smoke_artifact(
         print(f"[gsr-artifacts] smoke artifact failed (non-fatal): {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Reusable artifact interface for real external actions
+#
+# These are distinct from the smoke-test helpers above. They create proper
+# per-paper artifact records and return the github_file_url that must be
+# passed to post_comment / submit_verdict.
+#
+# Production callers must call validate_artifact_for_external_action(url)
+# before any real Koala write to ensure the URL is a real GitHub blob URL.
+# ---------------------------------------------------------------------------
+
+def create_comment_artifact(
+    paper_id: str,
+    body: str,
+    *,
+    parent_id: str | None = None,
+    artifact_dir: str = GSR_ARTIFACT_DIR,
+    github_repo: str | None = None,
+    logs_base_path: str | None = None,
+) -> str:
+    """Create a comment draft artifact and return the github_file_url.
+
+    Separate from write_local_artifact_smoke — this is for real comment
+    actions, not smoke tests. Creates files under artifact_dir/{paper_id}/.
+
+    Returns:
+        GitHub blob URL if KOALA_GITHUB_REPO is configured, otherwise a
+        TODO placeholder — callers must validate before posting.
+    """
+    sid = _short_id()
+    kw: dict = {"log_dir": artifact_dir}
+    if github_repo is not None:
+        kw["github_repo"] = github_repo
+    if logs_base_path is not None:
+        kw["logs_base_path"] = logs_base_path
+
+    content = "\n".join([
+        f"- **paper_id**: {paper_id}",
+        f"- **parent_id**: {parent_id or '(none — top-level thread)'}",
+        "",
+        "## Comment Content",
+        "",
+        body,
+    ])
+    return write_artifact(
+        paper_id,
+        "comment_draft",
+        short_id=sid,
+        summary=(body[:80].replace("\n", " ") or "(empty)"),
+        content=content,
+        **kw,
+    )
+
+
+def create_verdict_artifact(
+    paper_id: str,
+    score: float,
+    body: str,
+    cited_ids: list[str],
+    *,
+    artifact_dir: str = GSR_ARTIFACT_DIR,
+    github_repo: str | None = None,
+    logs_base_path: str | None = None,
+) -> str:
+    """Create a verdict draft artifact and return the github_file_url.
+
+    Returns:
+        GitHub blob URL if KOALA_GITHUB_REPO is configured, otherwise a
+        TODO placeholder — callers must validate before posting.
+    """
+    sid = _short_id()
+    kw: dict = {"log_dir": artifact_dir}
+    if github_repo is not None:
+        kw["github_repo"] = github_repo
+    if logs_base_path is not None:
+        kw["logs_base_path"] = logs_base_path
+
+    draft_lines = [
+        f"- **paper_id**: {paper_id}",
+        f"- **score**: {score}",
+        "",
+        "## Verdict Content",
+        "",
+        body,
+    ]
+    if cited_ids:
+        draft_lines += ["", "## Cited Comments", ""]
+        draft_lines += [f"- [[comment:{cid}]]" for cid in cited_ids]
+
+    return write_artifact(
+        paper_id,
+        "verdict_draft",
+        short_id=sid,
+        summary=f"Score {score}",
+        content="\n".join(draft_lines),
+        **kw,
+    )
+
+
+def validate_artifact_for_external_action(github_file_url: str) -> None:
+    """Assert that github_file_url is a real published URL, not a placeholder.
+
+    Must be called before any real Koala post_comment / submit_verdict.
+
+    Raises:
+        ValueError: if the URL is empty or starts with "TODO:".
+    """
+    if not github_file_url:
+        raise ValueError(
+            "github_file_url is empty; artifact must be created and published first."
+        )
+    if github_file_url.startswith("TODO:"):
+        raise ValueError(
+            f"github_file_url is a placeholder: {github_file_url!r}. "
+            "Set KOALA_GITHUB_REPO to enable real GitHub publishing."
+        )
+
+
+def ensure_github_file_url(github_file_url: str) -> str:
+    """Return github_file_url if valid, or raise ValueError.
+
+    Thin wrapper around validate_artifact_for_external_action for inline use.
+    """
+    validate_artifact_for_external_action(github_file_url)
+    return github_file_url
+
+
 def _emit_verdict_artifacts(
     arguments: dict,
     safe_mode: bool,
