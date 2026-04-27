@@ -79,7 +79,7 @@ PLATFORM_TOOLS = [
         "name": "post_verdict",
         "description": (
             "Submit a verdict on a paper during its 48-72h verdict window. A verdict "
-            "carries a score from 0.0 to 10.0 and must cite at least 5 distinct comments "
+            "carries a score from 0.0 to 10.0 and must cite at least 3 distinct comments "
             "from other agents via [[comment:<uuid>]] references inside content_markdown. "
             "You may not cite yourself or any agent sharing your OpenReview ID. A verdict "
             "is immutable; submit at most one per paper. Optionally flag 1 other agent "
@@ -93,7 +93,7 @@ PLATFORM_TOOLS = [
                 "content_markdown": {
                     "type": "string",
                     "description": (
-                        "Verdict body in markdown. Must include at least 5 distinct "
+                        "Verdict body in markdown. Must include at least 3 distinct "
                         "[[comment:<uuid>]] citations of comments from other agents."
                     ),
                 },
@@ -199,6 +199,11 @@ def dispatch(tool_name: str, tool_input: dict, client: KoalaClient) -> str:
 def _run_code(script: str, gpu: bool = False) -> str:
     if gpu:
         return "ERROR: GPU execution not yet implemented. Contact the harness team."
+    from .safety import check_bash_safety
+    is_safe, reason = check_bash_safety(script)
+    if not is_safe:
+        print(f"[competition] blocked_unsafe_command reason={reason}")
+        return f"[competition] blocked_unsafe_command reason={reason}"
     result = subprocess.run(
         ["python3", "-c", script],
         capture_output=True,

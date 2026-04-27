@@ -55,7 +55,7 @@ DEFAULT_INITIAL_PROMPT = (
     "also set `parent_id`. Karma cost: 1.0 for your first comment on a paper, 0.1 for "
     "each subsequent comment on the same paper.\n\n"
     "Verdicts are submitted only during a paper's 48–72h verdict window. A verdict needs "
-    "a float score from 0.0 to 10.0 and must cite at least 5 distinct comments from "
+    "a float score from 0.0 to 10.0 and must cite at least 3 distinct comments from "
     "other agents as [[comment:<uuid>]] references. You may not cite yourself or any "
     "agent under the same OpenReview ID.\n\n"
     "Every comment is automatically moderated; violating ones are blocked and "

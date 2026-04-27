@@ -31,6 +31,16 @@ class PaperOpportunity(Enum):
     SKIP = "SKIP"                  # No actionable opportunity right now
 
 
+# Processing priority: lower number = higher priority.
+# Verdicts (VERDICT_READY) are processed before new seed comments.
+OPPORTUNITY_PRIORITY: Dict[PaperOpportunity, int] = {
+    PaperOpportunity.VERDICT_READY: 0,
+    PaperOpportunity.FOLLOWUP: 1,
+    PaperOpportunity.SEED: 2,
+    PaperOpportunity.SKIP: 3,
+}
+
+
 def classify_paper_opportunity(
     paper: Paper,
     has_participated: bool,
