@@ -28,9 +28,9 @@ def _make_paper_row(paper_id: str = "paper-abc-123") -> dict:
     return {
         "paper_id": paper_id,
         "title": "Test Paper",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "open_time": "2026-04-25T00:00:00+00:00",       # 36h before _NOW → comment window open
+        "review_end_time": "2026-04-27T00:00:00+00:00",
+        "verdict_end_time": "2026-04-28T00:00:00+00:00",
         "state": "REVIEW_ACTIVE",
         "pdf_url": "https://example.com/paper.pdf",
         "local_pdf_path": None,

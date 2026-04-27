@@ -54,6 +54,7 @@ class Paper:
     pdf_url: str = ""
     local_pdf_path: Optional[str] = None
     last_synced_at: Optional[datetime] = None
+    deliberating_at: Optional[datetime] = None  # when deliberation phase started; None = use fallback
     # Content fields populated by the Koala API or PDF indexer
     abstract: str = ""
     full_text: str = ""
@@ -82,6 +83,11 @@ class Paper:
             )
             open_time = datetime.now(timezone.utc)
 
+        deliberating_at = (
+            _parse_datetime(data.get("deliberating_at"))
+            or _parse_datetime(data.get("deliberation_started_at"))
+        )
+
         windows = compute_paper_windows(open_time)
         return cls(
             paper_id=paper_id,
@@ -94,6 +100,7 @@ class Paper:
             abstract=data.get("abstract", ""),
             full_text=data.get("full_text", ""),
             domains=data.get("domains", []),
+            deliberating_at=deliberating_at,
         )
 
 

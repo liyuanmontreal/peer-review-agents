@@ -20,9 +20,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Optional
 
 REVIEW_DURATION_H: int = 48
-VERDICT_DURATION_H: int = 72
+DELIBERATION_DURATION_H: int = 24   # verdict / deliberation phase
+VERDICT_DURATION_H: int = 72        # total competition window (review + deliberation)
+SAFETY_BUFFER_S: int = 600          # 10-minute buffer before acting near window close
 
 
 class PaperPhase(str, Enum):
@@ -41,6 +44,19 @@ class MicroPhase(str, Enum):
     ELIGIBILITY_WINDOW = "ELIGIBILITY_WINDOW" # 48–60h
     SUBMISSION_WINDOW = "SUBMISSION_WINDOW"   # 60–72h
     EXPIRED = "EXPIRED"                       # after 72h
+
+
+@dataclass
+class PhaseWindow:
+    """Phase and remaining time for a paper at a specific instant.
+
+    phase:        "comment" | "verdict" | "expired"
+    ends_at:      when the current phase window closes (UTC)
+    seconds_left: seconds until window close; negative means already closed
+    """
+    phase: str
+    ends_at: datetime
+    seconds_left: float
 
 
 @dataclass
@@ -89,6 +105,55 @@ def get_micro_phase(now: datetime, open_time: datetime) -> MicroPhase:
     if elapsed_h < 72:
         return MicroPhase.SUBMISSION_WINDOW
     return MicroPhase.EXPIRED
+
+
+def compute_phase_window(
+    now: datetime,
+    paper_state: str,
+    open_time: datetime,
+    deliberating_at: Optional[datetime] = None,
+) -> PhaseWindow:
+    """Compute remaining window for a paper, using timestamps not just status.
+
+    Args:
+        now:             current UTC time
+        paper_state:     "REVIEW_ACTIVE" | "VERDICT_ACTIVE" | "EXPIRED" | "NEW"
+        open_time:       when the comment window opened (created_at / open_time)
+        deliberating_at: when deliberation started; None falls back to open_time + 48h
+
+    Returns:
+        PhaseWindow with phase, ends_at, and seconds_left.
+        seconds_left <= 0 means the window has already closed.
+    """
+    now = _ensure_utc(now)
+    open_time = _ensure_utc(open_time)
+
+    if paper_state == "REVIEW_ACTIVE":
+        ends_at = open_time + timedelta(hours=REVIEW_DURATION_H)
+        return PhaseWindow(
+            phase="comment",
+            ends_at=ends_at,
+            seconds_left=(ends_at - now).total_seconds(),
+        )
+
+    if paper_state == "VERDICT_ACTIVE":
+        if deliberating_at is not None:
+            delib_start = _ensure_utc(deliberating_at)
+        else:
+            delib_start = open_time + timedelta(hours=REVIEW_DURATION_H)
+        ends_at = delib_start + timedelta(hours=DELIBERATION_DURATION_H)
+        return PhaseWindow(
+            phase="verdict",
+            ends_at=ends_at,
+            seconds_left=(ends_at - now).total_seconds(),
+        )
+
+    ends_at = open_time + timedelta(hours=VERDICT_DURATION_H)
+    return PhaseWindow(
+        phase="expired",
+        ends_at=ends_at,
+        seconds_left=(ends_at - now).total_seconds(),
+    )
 
 
 def _ensure_utc(dt: datetime) -> datetime:

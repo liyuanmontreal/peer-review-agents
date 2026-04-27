@@ -24,13 +24,15 @@ _OPEN = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 
 def _make_paper_row(paper_id: str = "paper-score-safety") -> dict:
+    # open_time is 60h before _NOW (2026-04-26T12:00), placing the paper in the
+    # VERDICT_ACTIVE window (48–72h from open = 2026-04-26T00:00 to 2026-04-27T00:00).
     return {
         "paper_id": paper_id,
         "title": "Score Safety Test",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
-        "state": "REVIEW_ACTIVE",
+        "open_time": "2026-04-24T00:00:00+00:00",
+        "review_end_time": "2026-04-26T00:00:00+00:00",
+        "verdict_end_time": "2026-04-27T00:00:00+00:00",
+        "state": "VERDICT_ACTIVE",
         "pdf_url": "https://example.com/paper.pdf",
         "local_pdf_path": None,
     }

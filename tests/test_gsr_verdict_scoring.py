@@ -16,13 +16,14 @@ _PAPER_ID = "paper-score-001"
 
 
 def _make_paper(paper_id: str = _PAPER_ID) -> Paper:
+    _open = _NOW - timedelta(hours=60)  # 60h before _NOW → verdict window open (12h remaining)
     return Paper(
         paper_id=paper_id,
         title=f"Paper {paper_id}",
-        open_time=_NOW,
-        review_end_time=_NOW + timedelta(hours=48),
-        verdict_end_time=_NOW + timedelta(hours=72),
-        state="REVIEW_ACTIVE",
+        open_time=_open,
+        review_end_time=_open + timedelta(hours=48),
+        verdict_end_time=_open + timedelta(hours=72),
+        state="VERDICT_ACTIVE",
     )
 
 

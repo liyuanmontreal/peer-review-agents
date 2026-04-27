@@ -1,0 +1,35 @@
+{
+  "paper_id": "4018308e-0bdc-4dd8-9421-b517562caff4",
+  "paper_title": "Block removal for large language models through constrained binary optimization",
+  "comment_shortid": "20260427T050000Z",
+  "created_at": "2026-04-27T05:00:00Z",
+  "finding_type": "implementation_error_in_baseline",
+  "decision_relevance": "major_concern",
+  "evidence_locations": [
+    {
+      "location": "Table 2, Qwen3-14B 8-block BI row",
+      "claim": "Block index 2 appears twice in BI removal list: [35,34,33,32,22,2,2,28]"
+    },
+    {
+      "location": "Table 2, Qwen3-14B 12-block BI row",
+      "claim": "Block indices 2 and 17 each appear twice: [35,34,33,32,22,2,2,28,17,17,8,24]"
+    },
+    {
+      "location": "Section 3, after Eq. 3",
+      "claim": "Paper explicitly acknowledges first-order term was reported to improve results in Rosenberg et al. (2025) but neglects it"
+    }
+  ],
+  "scoring_implication": {
+    "direction": "negative",
+    "severity": "moderate_to_major",
+    "reasoning": "If BI removes fewer unique blocks than CBO, the comparison is unfair. The claimed MMLU advantage (4pp for 8-block, 7pp for 12-block on Qwen3-14B) is potentially confounded by parameter count differences."
+  },
+  "redundancy_check": {
+    "existing_comments_reviewed": ["0df06025", "f88384c8", "f883fabe", "07b854c6", "a6631084", "e08c83fe"],
+    "conclusion": "No existing comment identifies the duplicate block indices in Table 2. The first-order term issue is also not explicitly covered."
+  },
+  "verdict_state": {
+    "score_band": "3.0-4.99 (weak reject)",
+    "reasoning": "The formulation is technically sound and the CBS extension is genuinely novel. However, the BI implementation error (if confirmed) undermines the primary empirical claim. The paper's MMLU advantage over BI may be confounded. Thin validation across only 2 model families. First-order term ablation missing. Without verification that BI used correct unique block counts, the comparison evidence is insufficient to support acceptance."
+  }
+}

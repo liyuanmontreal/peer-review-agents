@@ -45,6 +45,7 @@ from ..artifacts.github import (
     validate_artifact_for_live_action,
 )
 from ..commenting.orchestrator import plan_and_post_reactive_comment
+from ..koala.errors import KoalaWindowClosedError
 from ..commenting.reactive_analysis import (
     analyze_reactive_candidates_for_paper,
     select_best_reactive_candidate_for_paper,
@@ -55,6 +56,7 @@ from ..reporting.run_summary import (
     write_run_summary_jsonl,
     write_run_summary_markdown,
 )
+from ..rules.timeline import SAFETY_BUFFER_S, compute_phase_window
 from ..rules.verdict_assembly import (
     VerdictEligibilityResult,
     build_verdict_draft_for_paper,
@@ -152,6 +154,7 @@ def _parse_dt(value: str) -> datetime:
 
 def _paper_from_row(row: dict) -> Paper:
     """Reconstruct a Paper dataclass from a koala_papers DB row dict."""
+    raw_delib = row.get("deliberating_at")
     return Paper(
         paper_id=row["paper_id"],
         title=row.get("title", ""),
@@ -161,6 +164,7 @@ def _paper_from_row(row: dict) -> Paper:
         state=row.get("state", "REVIEW_ACTIVE"),
         pdf_url=row.get("pdf_url", ""),
         local_pdf_path=row.get("local_pdf_path"),
+        deliberating_at=_parse_dt(raw_delib) if raw_delib else None,
     )
 
 
@@ -290,6 +294,47 @@ def _process_paper(
                           "live_budget_exhausted"|"dedup_skipped"|"allowlist_required"|
                           "missing_verdict_score"|"invalid_verdict_score"|"live_submitted"
     """
+    # Phase window — never rely on paper.state alone; verify with timestamps.
+    phase_window = compute_phase_window(
+        now, paper.state, paper.open_time, paper.deliberating_at
+    )
+    comment_phase_ok = (
+        phase_window.phase == "comment" and phase_window.seconds_left > SAFETY_BUFFER_S
+    )
+    verdict_phase_ok = (
+        phase_window.phase == "verdict" and phase_window.seconds_left > SAFETY_BUFFER_S
+    )
+    window_decision = (
+        "comment" if comment_phase_ok
+        else "verdict" if verdict_phase_ok
+        else "skip"
+    )
+    log.info(
+        "[window] paper=%s status=%s phase=%s seconds_left=%.0f ends_at=%s decision=%s",
+        paper.paper_id, paper.state, phase_window.phase,
+        phase_window.seconds_left, phase_window.ends_at.isoformat(), window_decision,
+    )
+
+    if phase_window.seconds_left <= 0:
+        return {
+            "paper_id": paper.paper_id,
+            "reactive_status": "window_skip",
+            "reactive_reason": "window_closed",
+            "reactive_artifact": None,
+            "reactive_live_posted": False,
+            "reactive_live_reason": "window_closed",
+            "verdict_status": "window_skip",
+            "verdict_reason": "window_closed",
+            "verdict_artifact": None,
+            "verdict_live_submitted": False,
+            "verdict_live_reason": "window_closed",
+            "has_reactive_candidate": False,
+            "reactive_draft_created": False,
+            "verdict_eligible": False,
+            "verdict_draft_created": False,
+            "window_skipped": True,
+        }
+
     reactive_results = analyze_reactive_candidates_for_paper(paper.paper_id, db)
     candidate = select_best_reactive_candidate_for_paper(paper.paper_id, reactive_results, db)
 
@@ -313,6 +358,7 @@ def _process_paper(
             and env_run_mode == "live"
             and live_budget_remaining > 0
             and live_client is not None
+            and comment_phase_ok
         )
 
         if not live_reactive:
@@ -325,17 +371,27 @@ def _process_paper(
             reactive_live_reason = "live_budget_exhausted"
         elif live_client is None:
             reactive_live_reason = "live_gate_failed"
+        elif not comment_phase_ok:
+            reactive_live_reason = "window_skip"
 
         if live_allowed:
-            comment_id = plan_and_post_reactive_comment(
-                paper, candidate, live_client, db, karma_remaining, now, test_mode=False
-            )
+            try:
+                comment_id = plan_and_post_reactive_comment(
+                    paper, candidate, live_client, db, karma_remaining, now, test_mode=False
+                )
+            except KoalaWindowClosedError:
+                log.warning(
+                    "[window] paper=%s 409_window_closed tool=post_comment", paper.paper_id
+                )
+                comment_id = None
+                reactive_live_reason = "window_closed"
+                reactive_status = "window_skip"
             if comment_id is not None:
                 reactive_status = "live_posted"
                 reactive_artifact = comment_id
                 reactive_live_posted = True
                 reactive_live_reason = "live_posted"
-            else:
+            elif reactive_live_reason != "window_closed":
                 reactive_live_reason = "live_gate_failed"
                 reactive_status = "skipped"
         else:
@@ -398,6 +454,7 @@ def _process_paper(
             and verdict_live_budget_remaining > 0
             and live_client is not None
             and verdict_artifact is not None
+            and verdict_phase_ok
         )
 
         if not live_verdict:
@@ -414,16 +471,28 @@ def _process_paper(
             verdict_live_reason = "live_gate_failed"
         elif verdict_artifact is None:
             verdict_live_reason = "no_eligible_verdict"
+        elif not verdict_phase_ok:
+            verdict_live_reason = "window_skip"
 
         if live_verdict_allowed:
-            submitted, submit_reason = _submit_live_verdict(
-                paper, db, reactive_results, now, live_client, eligibility,
-                score=effective_score, verdict_score=verdict_score_obj,
-            )
+            try:
+                submitted, submit_reason = _submit_live_verdict(
+                    paper, db, reactive_results, now, live_client, eligibility,
+                    score=effective_score, verdict_score=verdict_score_obj,
+                )
+            except KoalaWindowClosedError:
+                log.warning(
+                    "[window] paper=%s 409_window_closed tool=submit_verdict", paper.paper_id
+                )
+                submitted = False
+                submit_reason = "window_closed"
+                verdict_live_reason = "window_closed"
             if submitted:
                 verdict_status = "live_submitted"
                 verdict_live_submitted = True
                 verdict_live_reason = "live_submitted"
+            elif verdict_live_reason == "window_closed":
+                verdict_status = "window_skip"
             else:
                 if submit_reason in ("missing_verdict_score", "invalid_verdict_score"):
                     verdict_live_reason = submit_reason
@@ -531,6 +600,7 @@ def run_operational_loop(
         "live_budget_exhausted": 0,
         "reactive_live_gate_failed": 0,
         "skipped": 0,
+        "window_skipped": 0,
         "errors": [],
         "errors_count": 0,
         "summary_path": "",
@@ -588,7 +658,9 @@ def run_operational_loop(
             elif vlive_reason == "invalid_verdict_score":
                 counters["verdict_live_invalid_score"] += 1
 
-            if not result["reactive_draft_created"] and not result["verdict_draft_created"]:
+            if result.get("window_skipped"):
+                counters["window_skipped"] += 1
+            elif not result["reactive_draft_created"] and not result["verdict_draft_created"]:
                 counters["skipped"] += 1
 
             paper_live_results[paper_id] = {

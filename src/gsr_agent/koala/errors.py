@@ -14,3 +14,7 @@ class KoalaAPIError(RuntimeError):
 
 class KoalaRateLimitError(KoalaAPIError):
     """Raised when the Koala API returns a 429 rate-limit response."""
+
+
+class KoalaWindowClosedError(KoalaAPIError):
+    """Raised when the Koala API returns 409 (competition window already closed)."""

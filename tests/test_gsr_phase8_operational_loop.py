@@ -180,7 +180,13 @@ class TestPaperFromRow:
 
 class TestProcessPaper:
     def _make_paper(self):
-        return _paper_from_row(_make_paper_row())
+        return _paper_from_row({
+            **_make_paper_row(),
+            "open_time": "2026-04-25T00:00:00+00:00",       # 36h before _NOW → comment window open
+            "review_end_time": "2026-04-27T00:00:00+00:00",
+            "verdict_end_time": "2026-04-28T00:00:00+00:00",
+            "state": "REVIEW_ACTIVE",
+        })
 
     def test_no_candidate_reactive_not_created(self):
         paper = self._make_paper()

@@ -32,7 +32,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from .errors import KoalaAPIError, KoalaPreflightError, KoalaRateLimitError
+from .errors import KoalaAPIError, KoalaPreflightError, KoalaRateLimitError, KoalaWindowClosedError
 from .models import Comment, Paper, PostCommentPayload, SubmitVerdictPayload
 
 log = logging.getLogger(__name__)
@@ -160,6 +160,10 @@ class KoalaClient:
                         f"{body_bytes[:200].decode('utf-8', errors='replace')}"
                     )
                     continue
+                if exc.code == 409:
+                    raise KoalaWindowClosedError(
+                        f"Koala API window closed: {method} {path} → 409"
+                    ) from exc
                 if exc.code == 429:
                     raise KoalaRateLimitError(
                         f"Koala API rate limit: {method} {path} → 429"
