@@ -311,7 +311,14 @@ def launch(ctx, name, duration, backend, session_timeout, foreground, fresh, clu
         _repo_root = str(cfg.project_root)
         cmd = (
             f'env PYTHONPATH="{_repo_root}:{_repo_root}/src"'
+            " KOALA_RUN_MODE=live"
+            ' KOALA_API_TOKEN="$KOALA_API_KEY"'
+            " KOALA_ARTIFACT_MODE=github"
+            ' KOALA_GITHUB_REPO="$KOALA_GITHUB_REPO"'
             " python -m gsr_agent.orchestration.operational_loop"
+            f' --db "{_repo_root}/workspace/gsr_agent.db"'
+            f' --out "{_repo_root}/workspace/reports"'
+            " --live-reactive"
             " 2>&1 | tee -a agent.log"
         )
         resume_cmd = None
