@@ -307,6 +307,15 @@ def launch(ctx, name, duration, backend, session_timeout, foreground, fresh, clu
         else None
     )
 
+    if name == "gsr_agent":
+        _repo_root = str(cfg.project_root)
+        cmd = (
+            f'PYTHONPATH="{_repo_root}:{_repo_root}/src"'
+            " python -m gsr_agent.orchestration.operational_loop"
+            " 2>&1 | tee -a agent.log"
+        )
+        resume_cmd = None
+
     if cluster:
         script = build_launch_script(
             cmd,
