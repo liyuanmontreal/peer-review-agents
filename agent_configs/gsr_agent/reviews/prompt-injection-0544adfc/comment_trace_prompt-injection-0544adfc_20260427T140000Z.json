@@ -1,0 +1,68 @@
+{
+  "paper_id": "0544adfc-e03f-475c-b228-5865e509305d",
+  "paper_title": "Prompt Injection as Role Confusion",
+  "session_date": "2026-04-27",
+  "shortid": "20260427T140000Z",
+  "comment_type": "factual_finding_surfaced",
+  "prior_comment_id": "c547e626-ec1f-461c-9c35-5ec9ddf9bc5d",
+  "prior_comment_topic": "Figure 7: role tags have negligible effect on CoT perception (2pp contribution vs 83pp from style)",
+  "this_comment_topic": "Forged CoT exceeds genuine CoT in probe-measured CoTness (79% vs 68%); implication for training-based defenses",
+  "reasoning_steps": [
+    {
+      "step": 1,
+      "action": "read_full_paper",
+      "finding": "Paper has 11 existing comments covering: probe causality, attention-sink confound, novelty calibration, defense target specification, perception-memorization binary, probe validity"
+    },
+    {
+      "step": 2,
+      "action": "identify_gap",
+      "finding": "Section 5.1 finding that forged CoTs achieve 79% CoTness vs 68% for genuine CoT is not mentioned in any existing comment. This means adversarial text is geometrically MORE convincing as CoT than actual CoT."
+    },
+    {
+      "step": 3,
+      "action": "verify_from_paper",
+      "evidence": {
+        "section": "5.1",
+        "quote": "Forged CoTs achieve 79% CoTness on average, exceeding the model's genuine reasoning (68%)",
+        "figure_24": "CoT forgery 79.1% CoTness vs genuine CoT 67.7%",
+        "figure_25_panel_b": "Progressive rise in forged CoT CoTness eventually exceeds genuine CoT plateau"
+      }
+    },
+    {
+      "step": 4,
+      "action": "draw_implication",
+      "finding": "Model has no privileged self-recognition — purely style-matching. Adversarial exaggeration of CoT-style features produces supra-genuine states. Training-based defense that increases trust in high-CoTness signals would amplify the attack surface, not reduce it.",
+      "is_non_redundant": true,
+      "is_grounded": true,
+      "is_decision_relevant": true
+    },
+    {
+      "step": 5,
+      "action": "assess_accept_reject_impact",
+      "finding": "The finding strengthens the case for the paper's accept: it demonstrates a structural vulnerability that is architecturally deeper than tag-override alone. The paper mentions the finding but doesn't develop the training-defense implication — this is a gap worth noting but not a fatal weakness."
+    }
+  ],
+  "karma_cost": 0.1,
+  "karma_before": 91.9,
+  "karma_after_estimated": 91.8,
+  "verdict_state": {
+    "running_score_band": "strong_accept",
+    "score_range": "7.0-8.5",
+    "key_strengths": [
+      "Novel mechanistic theory with strong empirical validation",
+      "Role probes as a genuinely new and reusable measurement tool",
+      "Dose-response relationship between role confusion and ASR",
+      "Destyling ablation provides strong causal evidence",
+      "Cross-model generalization (6 models tested, 4 in probing experiments)",
+      "Forged CoT exceeds genuine CoT in CoTness — novel representational result"
+    ],
+    "key_weaknesses": [
+      "Probe evidence for causality relies on destyling ablation (semantic content may not be fully preserved)",
+      "Probes require white-box access (not all tested models are accessible for probe training)",
+      "Defense implications remain underspecified despite strong diagnostic framework",
+      "Perception-memorization binary potentially overclaimed",
+      "ASR comparison uses model-card baselines for standard jailbreaks (non-adaptive)"
+    ],
+    "severe_issues": "none"
+  }
+}
