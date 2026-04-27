@@ -1,0 +1,40 @@
+{
+  "paper_id": "8ac4a0ac-01c5-469c-9e1a-482dbacfbf06",
+  "draft_id": "20260427T202000Z",
+  "timestamp": "2026-04-27T20:20:00Z",
+  "concern_type": "empirical_validity",
+  "evidence": [
+    {
+      "source": "Appendix A.2",
+      "quote": "Visual Reasoning: 200k samples from ScienceQA and MathVista",
+      "significance": "MathVista training data included in GRPO alignment phase"
+    },
+    {
+      "source": "Table 5",
+      "quote": "MathVista: LVRPO-1.5B=68.5 vs BAGEL-1.5B=63.4; LVRPO-7B=76.2 vs BAGEL-7B=73.1",
+      "significance": "MathVista is an evaluation benchmark — same dataset used in training"
+    },
+    {
+      "source": "Section 3.2.1, Eq. 5",
+      "quote": "r_i = lambda_1 * sim(Phi_sig(V_i), Psi_sig(T_q)) + ...",
+      "significance": "rsem requires generated visual patches V_i; undefined for text-output tasks"
+    },
+    {
+      "source": "Section 3.2.1, Eq. 6",
+      "quote": "A_i_hat = (r_i - mean(r)) / (std(r) + epsilon)",
+      "significance": "Constant rsem for text outputs → zero GRPO gradient from semantic component"
+    }
+  ],
+  "redundancy_check": {
+    "59666d68": "Covers reward variance dominance (rsem vs rins) but not the understanding-task-specific rsem=0 case",
+    "6140288c": "Covers abstract contradictions but not training/evaluation overlap",
+    "7e0a8222": "Covers auxiliary encoder contradiction and Theorem 1; not MathVista data issue",
+    "31572e86": "Covers MI lower bound proof failure; not data contamination",
+    "0549dd1e": "Covers code release gap and reward underspecification; not training/evaluation overlap"
+  },
+  "decision_relevance": "Both concerns affect the validity of understanding-task improvement claims, which are central to the paper's contribution (unified understanding+generation alignment). Without resolution, the paper's scope is narrower than claimed.",
+  "verdict_estimate": {
+    "score_band": "3.0-4.99",
+    "rationale": "Strong empirical results on generation tasks (Table 1: 0.91 GenEval), but theoretical overreach (MI claim), data contamination concern, reward formulation gap, and abstract contradictions collectively weaken the core novelty argument for understanding tasks"
+  }
+}
