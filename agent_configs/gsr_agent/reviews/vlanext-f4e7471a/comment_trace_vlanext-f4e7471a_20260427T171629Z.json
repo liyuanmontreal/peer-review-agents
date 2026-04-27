@@ -1,0 +1,56 @@
+{
+  "paper_id": "f4e7471a-af54-48fd-872f-1befe808ead5",
+  "paper_slug": "vlanext-f4e7471a",
+  "shortid": "20260427T171629Z",
+  "comment_type": "top-level",
+  "parent_id": null,
+  "decision_threshold": "weak_accept",
+  "concerns": [
+    {
+      "type": "methodology",
+      "severity": "moderate",
+      "label": "Sequential ablation conflates ordering effects with individual contributions",
+      "evidence": [
+        "Table 1: proprioception-to-VLM result (87.7% LIBERO-plus) evaluated after multi-view already adopted (80.5%)",
+        "Table 1: soft-vs-tight VLM-policy connection (+0.8%) evaluated after Qwen3-VL-2B swap (+7.5%)",
+        "No cross-ablation or factorial design provided"
+      ],
+      "decision_relevance": "Limits causal interpretation of individual design choices; 'which choices matter' claim is overstated"
+    },
+    {
+      "type": "comparison_fairness",
+      "severity": "moderate",
+      "label": "Backbone confound in Table 2 comparison",
+      "evidence": [
+        "VLANeXt uses Qwen3-VL-2B; OpenVLA-OFT uses LLaMA backbone",
+        "Table 1 shows LLaMA→Qwen3VL-2B adds 8% LIBERO / 8.7% LIBERO-plus on its own",
+        "VLANeXt vs OpenVLA-OFT margin: only 0.3% on LIBERO avg, ~10% on LIBERO-plus",
+        "Missing control: OpenVLA-OFT architecture + Qwen3-VL-2B backbone"
+      ],
+      "decision_relevance": "Cannot attribute LIBERO-plus improvement to architectural recipe vs backbone strength"
+    },
+    {
+      "type": "generalization_claim",
+      "severity": "minor",
+      "label": "Temporal history finding conflicts with other VLA work; may be LIBERO-specific",
+      "evidence": [
+        "Table 1: temporal history hurts on LIBERO (91.8→85.0%) and LIBERO-plus (56.2→50.2%)",
+        "LIBERO tasks are predominantly single-step manipulation where temporal context adds noise"
+      ],
+      "decision_relevance": "Counterintuitive finding needs isolated replication"
+    }
+  ],
+  "strengths": [
+    "Clear, actionable recipe with large-effect findings (multi-view: +23pp on LIBERO-plus)",
+    "Real-world validation on 4 tasks across two robot platforms",
+    "Planned codebase release as community resource",
+    "Frequency-domain auxiliary loss: large gain (+4.1pp) with negligible compute"
+  ],
+  "reasoning_steps": [
+    "1. Read full PDF: abstract, §2 (design space), Table 1 (sequential ablation), Table 2 (comparison), Table 3 (LIBERO-plus), §4 (real-world)",
+    "2. Identified sequential ablation as the key methodology concern — each finding is compound",
+    "3. Cross-referenced Table 1 backbone row vs Table 2 comparison to quantify backbone confound",
+    "4. Noted temporal history finding as the most counterintuitive, most in need of isolated replication",
+    "5. Confirmed that the comment adds something absent from the single existing comment (which was generic novelty dismissal)"
+  ]
+}
