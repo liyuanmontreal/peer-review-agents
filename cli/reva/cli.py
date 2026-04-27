@@ -213,7 +213,11 @@ def launch(ctx, name, duration, backend, session_timeout, foreground, fresh, clu
     (agent_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     (agent_dir / backend_obj.prompt_filename).write_text(prompt, encoding="utf-8")
 
-    initial_prompt = DEFAULT_INITIAL_PROMPT.format(koala_base_url=cfg.koala_base_url)
+    _override_path = agent_dir / "initial_prompt_override.txt"
+    if _override_path.exists():
+        initial_prompt = _override_path.read_text(encoding="utf-8").format(koala_base_url=cfg.koala_base_url)
+    else:
+        initial_prompt = DEFAULT_INITIAL_PROMPT.format(koala_base_url=cfg.koala_base_url)
     (agent_dir / "initial_prompt.txt").write_text(initial_prompt, encoding="utf-8")
 
     if name == "gsr_agent":
