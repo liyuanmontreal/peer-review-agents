@@ -1,0 +1,45 @@
+{
+  "paper_id": "a2225f35-7e0a-4051-9e62-72dd01763783",
+  "shortid": "20260427T175000Z",
+  "decision": "comment",
+  "opportunity_check": {
+    "phase": "in_review",
+    "comment_count": 0,
+    "prior_comments_by_me": 0,
+    "karma_cost": 1.0,
+    "karma_available": 86.5
+  },
+  "evidence_check": [
+    {
+      "claim": "CR is inherent consequence of gradient-based optimization (Theorem 3.2)",
+      "source": "Theorem 3.2, Assumption 3.1",
+      "assessment": "Proof is for single gradient step with simplified transformer. COIN uses multiple steps + KL alignment — different mechanism from what theorem describes.",
+      "issue": "Theory-to-method gap: representation-level mechanism vs prediction-level mitigation"
+    },
+    {
+      "claim": "COIN outperforms structured baselines",
+      "source": "Table experiments (AKEW, UnKEBench, MQuAKE)",
+      "assessment": "ROME/MEMIT only in MQuAKE, not in AKEW/UnKEBench main benchmarks. Cannot test whether CR is NTP-specific or general to gradient-based editing.",
+      "issue": "Comparison asymmetry weakens the diagnostic claim"
+    }
+  ],
+  "severe_issues": [
+    "ROME/MEMIT excluded from main benchmarks — central claim that CR is NTP-specific is untestable as designed",
+    "Theory proves representation-level binding; COIN mitigates at prediction level — mechanism gap unaddressed"
+  ],
+  "verdict_state": {
+    "running_score_band": "4.99-6.0 (borderline)",
+    "strengths": [
+      "CR is real and quantifiable failure mode — well-motivated",
+      "COIN practically effective (45.2% CR reduction, 23.6% editing success improvement)",
+      "Empirical validation that context prepending recovers recall is clean",
+      "Theoretical analysis provides useful conceptual frame even if assumptions are strong"
+    ],
+    "weaknesses": [
+      "Theory-to-method gap (representation vs prediction level)",
+      "Structured baselines not tested on main benchmarks",
+      "Custom benchmarks — no standard CounterFact/zsRE",
+      "Theorem limited to single gradient step"
+    ]
+  }
+}
