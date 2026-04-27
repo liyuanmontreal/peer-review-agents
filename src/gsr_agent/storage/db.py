@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..koala.models import Comment, Paper
 
@@ -48,13 +48,15 @@ class KoalaDB:
 
     def _migrate(self) -> None:
         """Apply safe, additive schema migrations for existing databases."""
-        try:
-            self._conn.execute(
-                "ALTER TABLE koala_agent_actions ADD COLUMN details TEXT"
-            )
-            self._conn.commit()
-        except sqlite3.OperationalError:
-            pass  # column already exists — normal for new or already-migrated DBs
+        for stmt in (
+            "ALTER TABLE koala_agent_actions ADD COLUMN details TEXT",
+            "ALTER TABLE koala_comments ADD COLUMN synced_at TEXT",
+        ):
+            try:
+                self._conn.execute(stmt)
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     # ------------------------------------------------------------------
     # Papers
@@ -102,11 +104,15 @@ class KoalaDB:
         self._conn.execute(
             """INSERT INTO koala_comments
                (comment_id, paper_id, thread_id, parent_id, author_agent_id,
-                text, created_at, is_ours, is_citable)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                text, created_at, is_ours, is_citable, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(comment_id) DO UPDATE SET
+                   thread_id=excluded.thread_id,
+                   parent_id=excluded.parent_id,
+                   text=excluded.text,
                    is_ours=excluded.is_ours,
-                   is_citable=excluded.is_citable""",
+                   is_citable=excluded.is_citable,
+                   synced_at=excluded.synced_at""",
             (
                 comment.comment_id,
                 comment.paper_id,
@@ -117,6 +123,7 @@ class KoalaDB:
                 created_at,
                 int(comment.is_ours),
                 int(comment.is_citable),
+                _utcnow(),
             ),
         )
         self._conn.commit()
@@ -258,6 +265,290 @@ class KoalaDB:
             "ours": int(row["ours"] or 0),
             "citable_other": int(row["citable_other"] or 0),
         }
+
+    # ------------------------------------------------------------------
+    # Phase 5A: reactive fact-check tables
+    # ------------------------------------------------------------------
+
+    def clear_phase5a_for_comment(self, comment_id: str) -> None:
+        """Delete all Phase 5A rows for comment_id to enable idempotent reruns."""
+        for table in (
+            "koala_extracted_claims",
+            "koala_claim_verifications",
+            "koala_reactive_drafts",
+        ):
+            self._conn.execute(f"DELETE FROM {table} WHERE comment_id=?", (comment_id,))
+        self._conn.commit()
+
+    def insert_extracted_claim(self, claim: Dict[str, Any]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO koala_extracted_claims
+               (claim_id, comment_id, paper_id, claim_text, category,
+                confidence, challengeability, binary_question, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                claim["claim_id"],
+                claim["comment_id"],
+                claim["paper_id"],
+                claim["claim_text"],
+                claim.get("category"),
+                claim.get("confidence"),
+                claim.get("challengeability"),
+                claim.get("binary_question"),
+                _utcnow(),
+            ),
+        )
+        self._conn.commit()
+
+    def insert_claim_verification(self, verification: Dict[str, Any]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO koala_claim_verifications
+               (verification_id, claim_id, comment_id, paper_id, verdict,
+                confidence, reasoning, supporting_quote, model_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                verification["verification_id"],
+                verification["claim_id"],
+                verification["comment_id"],
+                verification["paper_id"],
+                verification["verdict"],
+                verification.get("confidence"),
+                verification.get("reasoning"),
+                verification.get("supporting_quote"),
+                verification.get("model_id"),
+                _utcnow(),
+            ),
+        )
+        self._conn.commit()
+
+    def insert_reactive_draft(self, draft: Dict[str, Any]) -> None:
+        analysis = draft.get("analysis_json")
+        if isinstance(analysis, dict):
+            analysis = json.dumps(analysis)
+        self._conn.execute(
+            """INSERT OR REPLACE INTO koala_reactive_drafts
+               (draft_id, comment_id, paper_id, recommendation, draft_text,
+                analysis_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                draft["draft_id"],
+                draft["comment_id"],
+                draft["paper_id"],
+                draft["recommendation"],
+                draft.get("draft_text"),
+                analysis,
+                _utcnow(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_citable_other_comments_for_paper(self, paper_id: str) -> list:
+        """Return citable other-agent comments for paper_id as a list of dicts."""
+        rows = self._conn.execute(
+            """SELECT comment_id, paper_id, thread_id, parent_id,
+                      author_agent_id, text, created_at, is_ours, is_citable
+               FROM koala_comments
+               WHERE paper_id=? AND is_ours=0 AND is_citable=1
+               ORDER BY created_at""",
+            (paper_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_phase5a_stats(self, paper_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return a summary of Phase 5A dry-run activity.
+
+        Scoped to paper_id when provided; global otherwise.
+        """
+        w = "WHERE paper_id=?" if paper_id else ""
+        p = (paper_id,) if paper_id else ()
+
+        def _scalar(sql: str) -> int:
+            return int(self._conn.execute(sql, p).fetchone()[0] or 0)
+
+        conjunction = "AND" if w else "WHERE"
+
+        comments_analyzed = _scalar(
+            f"SELECT COUNT(DISTINCT comment_id) FROM koala_reactive_drafts {w}"
+        )
+        claims_extracted = _scalar(
+            f"SELECT COUNT(*) FROM koala_extracted_claims {w}"
+        )
+        claims_verified = _scalar(
+            f"SELECT COUNT(*) FROM koala_claim_verifications {w}"
+        )
+        react_count = _scalar(
+            f"SELECT COUNT(*) FROM koala_reactive_drafts {w} {conjunction} recommendation='react'"
+        )
+        skip_count = _scalar(
+            f"SELECT COUNT(*) FROM koala_reactive_drafts {w} {conjunction} recommendation='skip'"
+        )
+        unclear_count = _scalar(
+            f"SELECT COUNT(*) FROM koala_reactive_drafts {w} {conjunction} recommendation='unclear'"
+        )
+
+        verdict_rows = self._conn.execute(
+            f"SELECT verdict, COUNT(*) FROM koala_claim_verifications {w} GROUP BY verdict",
+            p,
+        ).fetchall()
+        verdict_map = {row[0]: int(row[1] or 0) for row in verdict_rows}
+
+        contradicted_count = sum(
+            verdict_map.get(v, 0) for v in ("refuted", "contradicted", "contradiction")
+        )
+
+        return {
+            "comments_analyzed": comments_analyzed,
+            "claims_extracted": claims_extracted,
+            "claims_verified": claims_verified,
+            "react_count": react_count,
+            "skip_count": skip_count,
+            "unclear_count": unclear_count,
+            "contradicted_count": contradicted_count,
+            "supported_count": verdict_map.get("supported", 0),
+            "insufficient_count": verdict_map.get("insufficient_evidence", 0),
+            "verification_error_count": 0,
+        }
+
+    def get_reactive_analysis_for_comment(self, comment_id: str) -> Optional[Dict[str, Any]]:
+        """Return the persisted Phase 5A analysis for comment_id, or None."""
+        claims = [
+            dict(row)
+            for row in self._conn.execute(
+                "SELECT * FROM koala_extracted_claims WHERE comment_id=?",
+                (comment_id,),
+            ).fetchall()
+        ]
+        verifications = [
+            dict(row)
+            for row in self._conn.execute(
+                "SELECT * FROM koala_claim_verifications WHERE comment_id=?",
+                (comment_id,),
+            ).fetchall()
+        ]
+        draft_row = self._conn.execute(
+            "SELECT * FROM koala_reactive_drafts WHERE comment_id=?",
+            (comment_id,),
+        ).fetchone()
+        if draft_row is None and not claims and not verifications:
+            return None
+        return {
+            "claims": claims,
+            "verifications": verifications,
+            "draft": dict(draft_row) if draft_row else None,
+            "recommendation": draft_row["recommendation"] if draft_row else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Phase 7: run-summary queries
+    # ------------------------------------------------------------------
+
+    def get_papers(self, paper_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Return tracked papers as dicts, optionally filtered by paper_ids.
+
+        Ordered by open_time descending (most recently opened first).
+        """
+        if paper_ids:
+            placeholders = ",".join("?" * len(paper_ids))
+            rows = self._conn.execute(
+                f"SELECT * FROM koala_papers WHERE paper_id IN ({placeholders})"
+                " ORDER BY open_time DESC",
+                paper_ids,
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM koala_papers ORDER BY open_time DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_latest_action_for_paper(self, paper_id: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent koala_agent_actions row for paper_id, or None."""
+        row = self._conn.execute(
+            "SELECT * FROM koala_agent_actions"
+            " WHERE paper_id=? ORDER BY created_at DESC LIMIT 1",
+            (paper_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_distinct_other_agent_count(self, paper_id: str) -> int:
+        """Return the count of distinct non-self citable agents for paper_id."""
+        row = self._conn.execute(
+            """SELECT COUNT(DISTINCT author_agent_id)
+               FROM koala_comments
+               WHERE paper_id=? AND is_ours=0 AND is_citable=1 AND author_agent_id!=''""",
+            (paper_id,),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def get_strongest_contradiction_confidence(self, paper_id: str) -> Optional[float]:
+        """Return the highest contradiction confidence across claim verifications, or None."""
+        row = self._conn.execute(
+            """SELECT MAX(confidence)
+               FROM koala_claim_verifications
+               WHERE paper_id=?
+                 AND verdict IN ('refuted', 'contradicted', 'contradiction')""",
+            (paper_id,),
+        ).fetchone()
+        val = row[0] if row else None
+        return float(val) if val is not None else None
+
+    # ------------------------------------------------------------------
+    # Phase 8.5: dedup / idempotency queries
+    # ------------------------------------------------------------------
+
+    def has_recent_reactive_action_for_comment(
+        self,
+        paper_id: str,
+        comment_id: str,
+        now: datetime,
+        *,
+        within_hours: float = 12.0,
+        statuses: tuple = ("dry_run", "success"),
+    ) -> bool:
+        """Return True if a reactive_comment action already exists for this source comment.
+
+        Matches rows where details->source_comment_id equals comment_id, action was
+        logged within within_hours of now, and status is in statuses.
+        Both dry_run and success are treated as "already acted" by default.
+        """
+        cutoff = (now - timedelta(hours=within_hours)).astimezone(timezone.utc).isoformat()
+        placeholders = ",".join("?" * len(statuses))
+        row = self._conn.execute(
+            f"""SELECT 1 FROM koala_agent_actions
+                WHERE paper_id=?
+                  AND action_type='reactive_comment'
+                  AND status IN ({placeholders})
+                  AND created_at >= ?
+                  AND json_extract(details, '$.source_comment_id') = ?
+                LIMIT 1""",
+            (paper_id, *statuses, cutoff, comment_id),
+        ).fetchone()
+        return row is not None
+
+    def has_recent_verdict_action_for_paper(
+        self,
+        paper_id: str,
+        now: datetime,
+        *,
+        within_hours: float = 12.0,
+        statuses: tuple = ("dry_run", "success"),
+    ) -> bool:
+        """Return True if a verdict_draft action already exists for this paper recently.
+
+        Matches rows where action was logged within within_hours of now and status
+        is in statuses. Both dry_run and success are treated as "already acted".
+        """
+        cutoff = (now - timedelta(hours=within_hours)).astimezone(timezone.utc).isoformat()
+        placeholders = ",".join("?" * len(statuses))
+        row = self._conn.execute(
+            f"""SELECT 1 FROM koala_agent_actions
+                WHERE paper_id=?
+                  AND action_type='verdict_draft'
+                  AND status IN ({placeholders})
+                  AND created_at >= ?
+                LIMIT 1""",
+            (paper_id, *statuses, cutoff),
+        ).fetchone()
+        return row is not None
 
     def close(self) -> None:
         self._conn.close()

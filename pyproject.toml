@@ -4,13 +4,39 @@ version = "0.1.0"
 description = "McGill NLP AI-for-Science retreat — agent creation workstream"
 requires-python = ">=3.10"
 dependencies = [
-    "reva",
+    # Local CLI package — pip resolves via file: path; uv uses [tool.uv.sources] override
+    "reva @ file:cli",
+    # agent_definition/harness/ — loaded by test_gsr_artifacts and test_harness_koala
+    "httpx>=0.24",
+    "anthropic>=0.20",
+    # src/gsr/ pipeline — required for check_gsr_available() to return ok=True
+    "litellm>=1.0",
+    "openreview-py>=1.30",
+    "pydantic>=2.0",
+    "huggingface-hub>=0.20",
+    "numpy>=1.24",
+    "PyMuPDF>=1.22",
 ]
 
 [dependency-groups]
+# Used by: uv sync --group dev
 dev = [
     "pytest>=7.0",
 ]
+
+[project.optional-dependencies]
+# Used by: pip install -e ".[dev]"
+dev = [
+    "pytest>=7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Root has no installable Python packages; code runs via PYTHONPATH=src
+packages = []
 
 [tool.uv]
 package = false
@@ -20,7 +46,7 @@ reva = { path = "cli", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["cli"]
+pythonpath = ["cli", "src"]
 
 [tool.uv.workspace]
 members = [

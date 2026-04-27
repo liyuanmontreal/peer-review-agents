@@ -44,7 +44,7 @@ def _make_eligibility(**kwargs) -> VerdictEligibilityInput:
     defaults = dict(
         paper_id="paper-001",
         has_our_participation=True,
-        distinct_citable_other_agents=5,
+        distinct_citable_other_agents=3,
         open_time=_OPEN,
         audit_artifact_ready=True,
         internal_score_confidence=0.8,
@@ -59,7 +59,7 @@ def _make_verdict(**kwargs) -> VerdictPreflightInput:
     defaults = dict(
         paper_id="paper-001",
         score=7.0,
-        cited_comment_ids=["c1", "c2", "c3", "c4", "c5"],
+        cited_comment_ids=["c1", "c2", "c3"],
         github_file_url=_REAL_URL,
         eligibility=_make_eligibility(),
         now=_NOW_VERDICT,
@@ -233,20 +233,32 @@ def test_verdict_preflight_rejects_empty_citations():
         preflight_verdict_action(_make_verdict(cited_comment_ids=[]))
 
 
-def test_verdict_preflight_rejects_4_citations():
+def test_verdict_preflight_rejects_2_citations():
     with pytest.raises(KoalaPreflightError, match="[Cc]it"):
-        preflight_verdict_action(_make_verdict(cited_comment_ids=["c1", "c2", "c3", "c4"]))
+        preflight_verdict_action(_make_verdict(cited_comment_ids=["c1", "c2"]))
 
 
-def test_verdict_preflight_accepts_exactly_5_citations():
-    preflight_verdict_action(_make_verdict(cited_comment_ids=["c1", "c2", "c3", "c4", "c5"]))
+def test_verdict_preflight_accepts_exactly_3_citations():
+    preflight_verdict_action(_make_verdict(cited_comment_ids=["c1", "c2", "c3"]))
+
+
+def test_verdict_preflight_accepts_4_citations():
+    preflight_verdict_action(_make_verdict(cited_comment_ids=["c1", "c2", "c3", "c4"]))
 
 
 def test_verdict_preflight_deduplicates_cited_ids():
-    # 5 entries but only 4 distinct — should be rejected
+    # 3 entries but only 2 distinct — should be rejected
     with pytest.raises(KoalaPreflightError, match="[Cc]it"):
         preflight_verdict_action(
-            _make_verdict(cited_comment_ids=["c1", "c1", "c2", "c3", "c4"])
+            _make_verdict(cited_comment_ids=["c1", "c1", "c2"])
+        )
+
+
+def test_verdict_preflight_same_agent_multiple_comments_count_as_one():
+    # cited_comment_ids deduplication: ["c1", "c1", "c1"] → 1 distinct, rejected
+    with pytest.raises(KoalaPreflightError, match="[Cc]it"):
+        preflight_verdict_action(
+            _make_verdict(cited_comment_ids=["c1", "c1", "c1"])
         )
 
 
@@ -264,7 +276,7 @@ def test_verdict_preflight_rejects_without_participation():
 def test_verdict_preflight_rejects_insufficient_other_agents():
     with pytest.raises(KoalaPreflightError):
         preflight_verdict_action(
-            _make_verdict(eligibility=_make_eligibility(distinct_citable_other_agents=4))
+            _make_verdict(eligibility=_make_eligibility(distinct_citable_other_agents=2))
         )
 
 

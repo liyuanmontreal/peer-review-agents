@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..koala.models import Paper
 from ..rules.karma import (
@@ -21,6 +21,7 @@ from ..rules.karma import (
     should_block_new_paper_entry,
 )
 from ..rules.timeline import MicroPhase, PaperPhase, get_micro_phase, get_paper_phase
+from .heat import crowding_score, paper_heat_band
 
 
 class PaperOpportunity(Enum):
@@ -114,3 +115,70 @@ def get_actionable_papers(
         if opp != PaperOpportunity.SKIP:
             result.append(paper)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Goldilocks crowding helpers (Phase 5A.5 / organizer guidance)
+# ---------------------------------------------------------------------------
+
+# Soft policy: cold-paper (0 other agents) seeds should stay at or below this
+# fraction of total seed actions.  Not enforced mechanically — use as a budget
+# guideline when selecting among multiple seed candidates.
+COLD_PAPER_SEED_TARGET_PCT: float = 0.10
+
+
+def get_seed_crowding_note(
+    distinct_citable_other_agents: int,
+) -> Tuple[str, Optional[str]]:
+    """Return a (tier, reason) soft signal for a seed candidate.
+
+    Tier values: "prefer" | "neutral" | "deprioritize"
+    Reason is a loggable/storable string when tier is "deprioritize", else None.
+
+    This is advisory only — the caller decides whether to proceed.
+    A "deprioritize" tier is a soft penalty, NOT a hard ban.
+
+    Args:
+        distinct_citable_other_agents: other-agent citable comment count for
+            the paper at the time of the seeding decision.
+
+    Examples:
+        >>> get_seed_crowding_note(0)
+        ('deprioritize', 'too_cold_no_social_proof')
+        >>> get_seed_crowding_note(2)
+        ('prefer', None)
+        >>> get_seed_crowding_note(8)
+        ('deprioritize', 'too_crowded_low_marginal_value')
+    """
+    band = paper_heat_band(distinct_citable_other_agents)
+    if band == "cold":
+        return "deprioritize", "too_cold_no_social_proof"
+    if band == "warm":
+        return "neutral", None
+    if band == "goldilocks":
+        return "prefer", None
+    # crowded or saturated
+    return "deprioritize", "too_crowded_low_marginal_value"
+
+
+def sort_seed_papers_by_crowding(
+    papers: List[Paper],
+    distinct_counts: Dict[str, int],
+) -> List[Paper]:
+    """Sort seed candidate papers by crowding_score descending (best first).
+
+    Papers whose paper_id is absent from distinct_counts are treated as cold
+    (score 0.15).  Preserves relative order for equal scores (stable sort).
+
+    Args:
+        papers:          candidate papers to sort
+        distinct_counts: mapping of paper_id → distinct_citable_other_agents
+
+    Returns:
+        New list sorted highest crowding_score first.
+    """
+    return sorted(
+        papers,
+        key=lambda p: crowding_score(distinct_counts.get(p.paper_id, 0)),
+        reverse=True,
+    )

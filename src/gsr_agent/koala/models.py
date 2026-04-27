@@ -126,7 +126,7 @@ class Comment:
             thread_id=data.get("thread_id"),
             parent_id=data.get("parent_id"),
             is_ours=False,
-            is_citable=False,
+            is_citable=bool(data.get("is_citable", False)),
         )
 
 

@@ -371,20 +371,150 @@ def get_seed_evidence_candidates_from_gsr(
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 placeholders — do NOT implement yet
+# Phase 5A — claim extraction and verification
 # ---------------------------------------------------------------------------
 
-def extract_claims_from_koala_comment(comment_text: str) -> List[str]:
-    """Extract citable claims from a Koala comment. Placeholder for Phase 5."""
-    return []
+def extract_claims_from_koala_comment(
+    comment: str,
+    paper_id: str,
+    workspace: Optional[Path] = None,
+    *,
+    max_claims: int = 8,
+) -> List[dict]:
+    """Extract challengeable claims from a citable Koala comment via GSR.
+
+    Uses GSR's field-mode claim extractor directly (no SQLite writes).
+    Returns up to max_claims claim dicts, each with keys: id, claim_text,
+    verbatim_quote, claim_type, confidence, challengeability, category,
+    binary_question, why_challengeable.
+
+    Returns an empty list when GSR modules are unavailable or the comment
+    yields no verifiable claims.
+    """
+    try:
+        from gsr.claim_extraction.extractor import _extract_claims_from_field, _config_hash
+        from gsr.claim_extraction.llm import get_model_id
+    except ImportError as exc:
+        log.warning("[extract_claims_from_koala_comment] GSR unavailable: %s", exc)
+        return []
+
+    model_id = get_model_id(None)
+    cfg_hash = _config_hash(
+        model_id=model_id,
+        fields=("body",),
+        min_confidence=0.5,
+        min_challengeability=0.5,
+    )
+
+    try:
+        claims = _extract_claims_from_field(
+            review_id=f"koala_comment_{paper_id}",
+            paper_title="",
+            field_name="body",
+            review_text=comment,
+            cfg_hash=cfg_hash,
+            model=None,
+            min_confidence=0.5,
+            min_challengeability=0.5,
+        )
+    except Exception as exc:
+        log.warning("[extract_claims_from_koala_comment] extraction failed: %s", exc)
+        return []
+
+    return claims[:max_claims]
 
 
 def retrieve_and_verify_claims(
-    claims: List[str],
-    index: PaperIndex,
+    paper_id: str,
+    extracted_claims: List[dict],
+    workspace: Optional[Path] = None,
+    *,
+    top_k: int = 5,
 ) -> List[dict]:
-    """Verify claims against paper content. Placeholder for Phase 5."""
-    return []
+    """Verify extracted claims against paper_chunks evidence from the GSR DB.
+
+    Loads up to top_k text chunks for paper_id from gsr.db and calls
+    verify_claim() for each claim.  Returns a list of verification result
+    dicts with keys: id, claim_id, paper_id, review_id, verdict, confidence,
+    reasoning, supporting_quote, evidence, model_id, status, error.
+
+    Returns an empty list when GSR modules are unavailable, the DB is missing,
+    or extracted_claims is empty.
+    """
+    if not extracted_claims:
+        return []
+
+    try:
+        from gsr.claim_verification.verifier import verify_claim
+    except ImportError as exc:
+        log.warning("[retrieve_and_verify_claims] GSR unavailable: %s", exc)
+        return []
+
+    ws = get_gsr_workspace(workspace)
+    db_path = ws / "gsr.db"
+
+    evidence_chunks: List[dict] = []
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path), check_same_thread=False)
+            try:
+                rows = conn.execute(
+                    """SELECT id AS chunk_id, text, section, page
+                       FROM paper_chunks
+                       WHERE paper_id=?
+                       ORDER BY chunk_index
+                       LIMIT ?""",
+                    (paper_id, top_k),
+                ).fetchall()
+                for row in rows:
+                    evidence_chunks.append({
+                        "chunk_id": row[0],
+                        "text": row[1],
+                        "section": row[2],
+                        "page": row[3],
+                        "object_type": "text_chunk",
+                        "score": 1.0,
+                    })
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            log.warning("[retrieve_and_verify_claims] DB error loading chunks: %s", exc)
+
+    results = []
+    for claim in extracted_claims:
+        claim_for_verify = {
+            "id": claim.get("id", ""),
+            "paper_id": claim.get("paper_id", paper_id),
+            "review_id": claim.get("review_id", ""),
+            "claim_text": claim.get("claim_text", ""),
+            "verbatim_quote": claim.get("verbatim_quote", ""),
+            "claim_type": claim.get("claim_type", "factual"),
+            "confidence": claim.get("confidence", 0.5),
+        }
+        try:
+            result = verify_claim(claim_for_verify, evidence_chunks)
+            results.append(result)
+        except Exception as exc:
+            log.warning(
+                "[retrieve_and_verify_claims] verify_claim failed for %r: %s",
+                claim_for_verify["id"], exc,
+            )
+            results.append({
+                "id": claim_for_verify["id"],
+                "claim_id": claim_for_verify["id"],
+                "paper_id": paper_id,
+                "review_id": claim_for_verify["review_id"],
+                "verdict": "insufficient_evidence",
+                "confidence": 0.0,
+                "reasoning": f"Verification error: {exc}",
+                "supporting_quote": None,
+                "evidence": [],
+                "model_id": "",
+                "status": "error",
+                "error": str(exc),
+            })
+
+    return results
 
 
 # ---------------------------------------------------------------------------

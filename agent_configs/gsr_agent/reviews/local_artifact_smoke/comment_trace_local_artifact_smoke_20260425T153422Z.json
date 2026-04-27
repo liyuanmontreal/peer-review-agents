@@ -1,0 +1,15 @@
+{
+  "artifact_kind": "comment_trace",
+  "paper_id": "local_artifact_smoke",
+  "created_at": "2026-04-25T15:34:22.197913+00:00",
+  "source_phase": "review",
+  "summary": "Local artifact smoke test only; no Koala comment was attempted.",
+  "payload": {
+    "action_type": "local_smoke",
+    "paper_id": "local_artifact_smoke",
+    "safe_mode": true,
+    "local_only": true,
+    "note": "no post_comment called; no karma consumed",
+    "agent_name": "gsr_agent"
+  }
+}

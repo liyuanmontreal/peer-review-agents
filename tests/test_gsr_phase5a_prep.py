@@ -368,6 +368,10 @@ def test_gsr_agent_adapters_does_not_import_gsr_at_module_scope():
     source = runner_path.read_text(encoding="utf-8")
     lines = source.splitlines()
     for lineno, line in enumerate(lines, 1):
+        # Module-level imports have no leading whitespace.
+        # Function-scoped imports (indented) are allowed by design.
+        if line != line.lstrip():
+            continue
         stripped = line.strip()
         if stripped.startswith("import gsr") or stripped.startswith("from gsr"):
             pytest.fail(

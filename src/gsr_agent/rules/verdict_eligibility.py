@@ -3,7 +3,7 @@
 A verdict may only be submitted when ALL of these hard gates pass:
   1. The agent has participated in discussion on the paper.
   2. The paper is currently in its verdict window (48–72h).
-  3. At least 5 distinct other agents have citable comments.
+  3. At least 3 distinct other agents have citable comments.
   4. An audit artifact is created and its github_file_url is available.
   5. Internal score confidence >= min_confidence threshold.
   6. The verdict has not already been submitted.
@@ -20,7 +20,7 @@ from enum import Enum
 
 from .timeline import PaperPhase, _ensure_utc, get_paper_phase
 
-MIN_DISTINCT_OTHER_AGENTS: int = 5
+MIN_DISTINCT_OTHER_AGENTS: int = 3
 MIN_VERDICT_CONFIDENCE: float = 0.6
 
 

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS koala_comments (
     created_at          TEXT NOT NULL,                  -- ISO-8601 UTC
     is_ours             INTEGER NOT NULL DEFAULT 0,
     is_citable          INTEGER NOT NULL DEFAULT 0,
+    synced_at           TEXT,                              -- ISO-8601 UTC; NULL for rows pre-dating this column
     FOREIGN KEY (paper_id) REFERENCES koala_papers(paper_id)
 );
 
@@ -49,6 +50,44 @@ CREATE TABLE IF NOT EXISTS koala_karma_ledger (
     karma_before        REAL NOT NULL,
     karma_after         REAL NOT NULL,
     created_at          TEXT NOT NULL                   -- ISO-8601 UTC
+);
+
+-- Phase 5A: claims extracted from other-agent citable comments.
+CREATE TABLE IF NOT EXISTS koala_extracted_claims (
+    claim_id            TEXT PRIMARY KEY,
+    comment_id          TEXT NOT NULL,
+    paper_id            TEXT NOT NULL,
+    claim_text          TEXT NOT NULL,
+    category            TEXT,
+    confidence          REAL,
+    challengeability    REAL,
+    binary_question     TEXT,
+    created_at          TEXT NOT NULL
+);
+
+-- Phase 5A: GSR verification results for extracted claims.
+CREATE TABLE IF NOT EXISTS koala_claim_verifications (
+    verification_id     TEXT PRIMARY KEY,
+    claim_id            TEXT NOT NULL,
+    comment_id          TEXT NOT NULL,
+    paper_id            TEXT NOT NULL,
+    verdict             TEXT NOT NULL,              -- supported | refuted | insufficient_evidence | not_verifiable
+    confidence          REAL,
+    reasoning           TEXT,
+    supporting_quote    TEXT,
+    model_id            TEXT,
+    created_at          TEXT NOT NULL
+);
+
+-- Phase 5A: reactive draft suggestions (dry-run only, never posted).
+CREATE TABLE IF NOT EXISTS koala_reactive_drafts (
+    draft_id            TEXT PRIMARY KEY,
+    comment_id          TEXT NOT NULL,
+    paper_id            TEXT NOT NULL,
+    recommendation      TEXT NOT NULL,             -- react | skip | unclear
+    draft_text          TEXT,
+    analysis_json       TEXT,                      -- JSON summary of verdict counts + skip_reason
+    created_at          TEXT NOT NULL
 );
 
 -- Per-paper verdict eligibility state (latest snapshot per paper).

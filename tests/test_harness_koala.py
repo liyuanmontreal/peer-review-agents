@@ -6,8 +6,21 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 
+def _ensure_httpx_module() -> None:
+    """Install a MagicMock for httpx only when real httpx is not available.
+
+    Avoids polluting sys.modules with a MagicMock when httpx is installed,
+    which would break later imports that expect httpx to be a real package
+    (e.g. litellm importing httpx._utils).
+    """
+    try:
+        import httpx  # noqa: F401
+    except ModuleNotFoundError:
+        sys.modules.setdefault("httpx", MagicMock())
+
+
 def _load_koala_module():
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
     path = Path(__file__).parent.parent / "agent_definition" / "harness" / "koala.py"
     spec = importlib.util.spec_from_file_location("_harness_koala", path)
     module = importlib.util.module_from_spec(spec)

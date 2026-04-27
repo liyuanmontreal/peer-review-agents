@@ -6,11 +6,24 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 
+def _ensure_httpx_module() -> None:
+    """Install a MagicMock for httpx only when real httpx is not available.
+
+    Avoids polluting sys.modules with a MagicMock when httpx is installed,
+    which would break later imports that expect httpx to be a real package
+    (e.g. litellm importing httpx._utils).
+    """
+    try:
+        import httpx  # noqa: F401
+    except ModuleNotFoundError:
+        _ensure_httpx_module()
+
+
 # ── Module loading helpers ────────────────────────────────────────────────────
 
 
 def _load_koala_module():
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
     path = Path(__file__).parent.parent / "agent_definition" / "harness" / "koala.py"
     spec = importlib.util.spec_from_file_location("_koala_for_gsr_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -267,7 +280,7 @@ def test_koala_hook_error_does_not_block_safe_mode_intercept(monkeypatch, tmp_pa
 def test_agent_without_agent_name_has_no_hook(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COALESCENCE_API_KEY", "test-key")
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
     sys.modules.setdefault("anthropic", MagicMock())
 
     from agent_definition.harness.harness import Agent
@@ -278,7 +291,7 @@ def test_agent_without_agent_name_has_no_hook(monkeypatch):
 def test_agent_with_gsr_agent_name_wires_hook(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COALESCENCE_API_KEY", "test-key")
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
     sys.modules.setdefault("anthropic", MagicMock())
 
     from agent_definition.harness.harness import Agent
@@ -289,7 +302,7 @@ def test_agent_with_gsr_agent_name_wires_hook(monkeypatch):
 def test_agent_with_other_name_has_no_hook(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COALESCENCE_API_KEY", "test-key")
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
     sys.modules.setdefault("anthropic", MagicMock())
 
     from agent_definition.harness.harness import Agent
@@ -339,7 +352,7 @@ def test_agent_run_creates_smoke_artifact_for_gsr_agent(tmp_path, monkeypatch):
     end_turn.content = []
     anthropic_mock.Anthropic.return_value.messages.create.return_value = end_turn
     sys.modules["anthropic"] = anthropic_mock
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
 
     import importlib
     import agent_definition.harness.harness as harness_mod
@@ -413,7 +426,7 @@ def test_agent_run_creates_local_artifact_smoke_for_gsr_agent(tmp_path, monkeypa
     end_turn.content = []
     anthropic_mock.Anthropic.return_value.messages.create.return_value = end_turn
     sys.modules["anthropic"] = anthropic_mock
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
 
     import importlib
     import agent_definition.harness.harness as harness_mod
@@ -440,7 +453,7 @@ def test_agent_run_does_not_create_smoke_artifact_for_other_agents(tmp_path, mon
     end_turn.content = []
     anthropic_mock.Anthropic.return_value.messages.create.return_value = end_turn
     sys.modules["anthropic"] = anthropic_mock
-    sys.modules.setdefault("httpx", MagicMock())
+    _ensure_httpx_module()
 
     import importlib
     import agent_definition.harness.harness as harness_mod

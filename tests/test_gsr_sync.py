@@ -314,3 +314,182 @@ def test_get_comment_stats_returns_zeros_for_unknown_paper(tmp_path):
     stats = db.get_comment_stats("nonexistent")
     assert stats == {"total": 0, "ours": 0, "citable_other": 0}
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Audit patch: is_citable, synced_at, thread/parent refresh
+# ---------------------------------------------------------------------------
+
+def test_comment_from_api_reads_is_citable_true():
+    from datetime import datetime, timezone
+    data = {
+        "id": "c-cit", "paper_id": "p-001",
+        "author_id": "agent-a", "content_markdown": "Nice.",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "is_citable": True,
+    }
+    c = Comment.from_api(data, "p-001")
+    assert c.is_citable is True
+
+
+def test_comment_from_api_reads_is_citable_false():
+    from datetime import datetime, timezone
+    data = {
+        "id": "c-ncit", "paper_id": "p-001",
+        "author_id": "agent-b", "content_markdown": "Hmm.",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "is_citable": False,
+    }
+    c = Comment.from_api(data, "p-001")
+    assert c.is_citable is False
+
+
+def test_comment_from_api_defaults_is_citable_false_when_absent():
+    from datetime import datetime, timezone
+    data = {
+        "id": "c-no-cit", "paper_id": "p-001",
+        "author_id": "agent-c", "content_markdown": "Text.",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    c = Comment.from_api(data, "p-001")
+    assert c.is_citable is False
+
+
+def test_upsert_comment_sets_synced_at(tmp_path):
+    from gsr_agent.storage.db import KoalaDB
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+    db.upsert_comment(_make_comment("c-001", paper_id="p-001"))
+
+    row = db._conn.execute(
+        "SELECT synced_at FROM koala_comments WHERE comment_id='c-001'"
+    ).fetchone()
+    assert row is not None
+    assert row["synced_at"] is not None
+    db.close()
+
+
+def test_upsert_comment_refreshes_thread_and_parent_on_conflict(tmp_path):
+    from datetime import datetime, timezone
+    from gsr_agent.storage.db import KoalaDB
+
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+
+    c = Comment(
+        comment_id="c-001", paper_id="p-001", author_agent_id="ag",
+        text="v1", created_at=datetime.now(timezone.utc),
+        thread_id="t-old", parent_id="p-old",
+    )
+    db.upsert_comment(c)
+
+    c2 = Comment(
+        comment_id="c-001", paper_id="p-001", author_agent_id="ag",
+        text="v1", created_at=datetime.now(timezone.utc),
+        thread_id="t-new", parent_id="p-new",
+    )
+    db.upsert_comment(c2)
+
+    row = db._conn.execute(
+        "SELECT thread_id, parent_id FROM koala_comments WHERE comment_id='c-001'"
+    ).fetchone()
+    assert row["thread_id"] == "t-new"
+    assert row["parent_id"] == "p-new"
+    db.close()
+
+
+def test_no_duplicate_rows_on_resync(tmp_path):
+    from gsr_agent.storage.db import KoalaDB
+
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+    comment = _make_comment("c-001", paper_id="p-001")
+
+    db.upsert_comment(comment)
+    db.upsert_comment(comment)
+    db.upsert_comment(comment)
+
+    count = db._conn.execute(
+        "SELECT COUNT(*) FROM koala_comments WHERE comment_id='c-001'"
+    ).fetchone()[0]
+    assert count == 1
+    db.close()
+
+
+def test_all_comments_stored_regardless_of_is_ours(tmp_path):
+    from gsr_agent.storage.db import KoalaDB
+
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+
+    comments = [
+        _make_comment("c-ours", paper_id="p-001", author="our-agent"),
+        _make_comment("c-other", paper_id="p-001", author="other-agent"),
+    ]
+    client = _make_client(comments=comments)
+
+    sync_paper_comments(client, db, "p-001", agent_id="our-agent")
+
+    count = db._conn.execute(
+        "SELECT COUNT(*) FROM koala_comments WHERE paper_id='p-001'"
+    ).fetchone()[0]
+    assert count == 2
+    db.close()
+
+
+def test_citable_other_nonzero_after_sync_with_citable_api_data(tmp_path):
+    from datetime import datetime, timezone
+    from gsr_agent.storage.db import KoalaDB
+
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+
+    now = datetime.now(timezone.utc)
+    citable_comment = Comment(
+        comment_id="c-cit", paper_id="p-001", author_agent_id="other-agent",
+        text="Citable comment.", created_at=now, is_citable=True,
+    )
+    non_citable = Comment(
+        comment_id="c-ncit", paper_id="p-001", author_agent_id="other-agent2",
+        text="Non-citable.", created_at=now, is_citable=False,
+    )
+    client = _make_client(comments=[citable_comment, non_citable])
+
+    sync_paper_comments(client, db, "p-001", agent_id="our-agent")
+
+    stats = db.get_comment_stats("p-001")
+    assert stats["total"] == 2
+    assert stats["citable_other"] == 1
+    db.close()
+
+
+def test_upsert_comment_refreshes_text_on_conflict(tmp_path):
+    from datetime import datetime, timezone
+    from gsr_agent.storage.db import KoalaDB
+
+    db = KoalaDB(db_path=str(tmp_path / "test.db"))
+    paper = _make_paper("p-001")
+    db.upsert_paper(paper)
+
+    c1 = Comment(
+        comment_id="c-001", paper_id="p-001", author_agent_id="ag",
+        text="original text", created_at=datetime.now(timezone.utc),
+    )
+    db.upsert_comment(c1)
+
+    c2 = Comment(
+        comment_id="c-001", paper_id="p-001", author_agent_id="ag",
+        text="updated text", created_at=datetime.now(timezone.utc),
+    )
+    db.upsert_comment(c2)
+
+    row = db._conn.execute(
+        "SELECT text FROM koala_comments WHERE comment_id='c-001'"
+    ).fetchone()
+    assert row["text"] == "updated text"
+    db.close()

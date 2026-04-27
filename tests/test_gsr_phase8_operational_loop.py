@@ -1,0 +1,545 @@
+"""Tests for Phase 8: Operational Loop (dry-run orchestrator)."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from gsr_agent.commenting.reactive_analysis import ReactiveAnalysisResult
+from gsr_agent.orchestration.operational_loop import (
+    _DryRunClient,
+    _paper_from_row,
+    _process_paper,
+    run_operational_loop,
+)
+from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
+
+_MOD = "gsr_agent.orchestration.operational_loop"
+_NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_paper_row(paper_id: str = "paper-abc-123") -> dict:
+    return {
+        "paper_id": paper_id,
+        "title": "Test Paper",
+        "open_time": "2026-04-01T00:00:00+00:00",
+        "review_end_time": "2026-04-15T00:00:00+00:00",
+        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "https://example.com/paper.pdf",
+        "local_pdf_path": None,
+    }
+
+
+def _make_eligibility(eligible: bool = True) -> VerdictEligibilityResult:
+    return VerdictEligibilityResult(
+        eligible=eligible,
+        reason_code="eligible" if eligible else "no_react_signal",
+        heat_band="goldilocks",
+        distinct_citable_other_agents=3,
+        strongest_contradiction_confidence=0.80,
+        selected_candidates=[],
+    )
+
+
+def _make_reactive_result(recommendation: str = "react") -> ReactiveAnalysisResult:
+    return ReactiveAnalysisResult(
+        comment_id="cmt-other-001",
+        paper_id="paper-abc-123",
+        recommendation=recommendation,
+        draft_text="[DRY-RUN — not posted]\n\nDraft reactive text here.",
+    )
+
+
+def _make_db(paper_rows: list | None = None) -> MagicMock:
+    db = MagicMock()
+    db.get_papers.return_value = paper_rows if paper_rows is not None else [_make_paper_row()]
+    return db
+
+
+def _no_op_result() -> dict:
+    return {
+        "paper_id": "paper-abc-123",
+        "reactive_status": "none",
+        "reactive_reason": None,
+        "reactive_artifact": None,
+        "verdict_status": "ineligible",
+        "verdict_reason": None,
+        "verdict_artifact": None,
+        "has_reactive_candidate": False,
+        "reactive_draft_created": False,
+        "verdict_eligible": False,
+        "verdict_draft_created": False,
+    }
+
+
+def _make_process_db(
+    *,
+    reactive_dedup: bool = False,
+    verdict_dedup: bool = False,
+) -> MagicMock:
+    """MagicMock db with dedup methods returning False by default."""
+    db = MagicMock()
+    db.has_recent_reactive_action_for_comment.return_value = reactive_dedup
+    db.has_recent_verdict_action_for_paper.return_value = verdict_dedup
+    return db
+
+
+# ---------------------------------------------------------------------------
+# TestDryRunClient
+# ---------------------------------------------------------------------------
+
+class TestDryRunClient:
+    def test_post_comment_returns_fake_id(self):
+        client = _DryRunClient()
+        result = client.post_comment("paper-abc-123", "body", "https://example.com/f")
+        assert result == "dry-run-paper-ab"
+
+    def test_post_comment_truncates_to_8_chars(self):
+        client = _DryRunClient()
+        result = client.post_comment("x" * 20, "body", "url")
+        assert result == f"dry-run-{'x' * 8}"
+
+    def test_post_comment_accepts_thread_and_parent(self):
+        client = _DryRunClient()
+        result = client.post_comment(
+            "paper-abc", "body", "url", thread_id="t1", parent_id="p1"
+        )
+        assert result.startswith("dry-run-")
+
+    def test_post_comment_short_paper_id(self):
+        client = _DryRunClient()
+        result = client.post_comment("ab", "body", "url")
+        assert result == "dry-run-ab"
+
+    def test_submit_verdict_raises(self):
+        client = _DryRunClient()
+        with pytest.raises(RuntimeError, match="submit_verdict"):
+            client.submit_verdict("paper-id", 0.5)
+
+
+# ---------------------------------------------------------------------------
+# TestPaperFromRow
+# ---------------------------------------------------------------------------
+
+class TestPaperFromRow:
+    def test_all_fields_parsed(self):
+        row = _make_paper_row()
+        paper = _paper_from_row(row)
+        assert paper.paper_id == "paper-abc-123"
+        assert paper.title == "Test Paper"
+        assert paper.open_time == datetime(2026, 4, 1, tzinfo=timezone.utc)
+        assert paper.review_end_time == datetime(2026, 4, 15, tzinfo=timezone.utc)
+        assert paper.verdict_end_time == datetime(2026, 4, 22, tzinfo=timezone.utc)
+        assert paper.state == "REVIEW_ACTIVE"
+        assert paper.pdf_url == "https://example.com/paper.pdf"
+        assert paper.local_pdf_path is None
+
+    def test_empty_title_preserved(self):
+        row = {**_make_paper_row(), "title": ""}
+        paper = _paper_from_row(row)
+        assert paper.title == ""
+
+    def test_missing_title_defaults_empty(self):
+        row = _make_paper_row()
+        del row["title"]
+        paper = _paper_from_row(row)
+        assert paper.title == ""
+
+    def test_missing_state_defaults_to_review_active(self):
+        row = _make_paper_row()
+        del row["state"]
+        paper = _paper_from_row(row)
+        assert paper.state == "REVIEW_ACTIVE"
+
+    def test_invalid_open_time_falls_back_gracefully(self):
+        row = {**_make_paper_row(), "open_time": "not-a-date"}
+        paper = _paper_from_row(row)
+        assert paper.open_time is not None
+
+    def test_local_pdf_path_preserved_when_set(self):
+        row = {**_make_paper_row(), "local_pdf_path": "/tmp/paper.pdf"}
+        paper = _paper_from_row(row)
+        assert paper.local_pdf_path == "/tmp/paper.pdf"
+
+    def test_different_paper_ids(self):
+        for pid in ["p1", "paper-xyz-999", "a" * 40]:
+            paper = _paper_from_row({**_make_paper_row(), "paper_id": pid})
+            assert paper.paper_id == pid
+
+
+# ---------------------------------------------------------------------------
+# TestProcessPaper
+# ---------------------------------------------------------------------------
+
+class TestProcessPaper:
+    def _make_paper(self):
+        return _paper_from_row(_make_paper_row())
+
+    def test_no_candidate_reactive_not_created(self):
+        paper = self._make_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.plan_and_post_reactive_comment") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["has_reactive_candidate"] is False
+        assert result["reactive_draft_created"] is False
+        mock_post.assert_not_called()
+
+    def test_candidate_found_comment_posted(self):
+        paper = self._make_paper()
+        candidate = _make_reactive_result()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="cmt-new-001"),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["has_reactive_candidate"] is True
+        assert result["reactive_draft_created"] is True
+
+    def test_candidate_found_but_post_returns_none(self):
+        paper = self._make_paper()
+        candidate = _make_reactive_result()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["has_reactive_candidate"] is True
+        assert result["reactive_draft_created"] is False
+
+    def test_verdict_eligible_draft_created(self):
+        paper = self._make_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(True)),
+            patch(
+                f"{_MOD}.plan_verdict_for_paper",
+                return_value={"artifact_url": "url/v.md", "status": "dry_run"},
+            ),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["verdict_eligible"] is True
+        assert result["verdict_draft_created"] is True
+
+    def test_verdict_ineligible_plan_not_called(self):
+        paper = self._make_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_verdict_for_paper") as mock_verdict,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["verdict_eligible"] is False
+        assert result["verdict_draft_created"] is False
+        mock_verdict.assert_not_called()
+
+    def test_verdict_eligible_but_no_artifact_url(self):
+        paper = self._make_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(True)),
+            patch(f"{_MOD}.plan_verdict_for_paper", return_value={"status": "skipped"}),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        assert result["verdict_eligible"] is True
+        assert result["verdict_draft_created"] is False
+
+    def test_test_mode_forwarded_to_reactive_comment(self):
+        paper = self._make_paper()
+        candidate = _make_reactive_result()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="id") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 50.0, _NOW, test_mode=True
+            )
+
+        _, kwargs = mock_post.call_args
+        assert kwargs.get("test_mode") is True
+
+    def test_test_mode_forwarded_to_verdict(self):
+        paper = self._make_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(True)),
+            patch(f"{_MOD}.plan_verdict_for_paper", return_value={"artifact_url": "u"}) as mock_v,
+        ):
+            _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 50.0, _NOW, test_mode=False
+            )
+
+        _, kwargs = mock_v.call_args
+        assert kwargs.get("test_mode") is False
+
+    def test_reactive_results_passed_to_eligibility(self):
+        paper = self._make_paper()
+        candidate = _make_reactive_result()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)) as mock_elig,
+        ):
+            _process_paper(
+                paper, _DryRunClient(), _make_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        mock_elig.assert_called_once()
+        args, _ = mock_elig.call_args_list[0]
+        assert args[2] == [candidate]
+
+
+# ---------------------------------------------------------------------------
+# TestRunOperationalLoop
+# ---------------------------------------------------------------------------
+
+class TestRunOperationalLoop:
+    """Integration-level tests for run_operational_loop (mocks _process_paper)."""
+
+    def _run_loop(
+        self,
+        paper_rows: list | None = None,
+        max_papers: int | None = None,
+        paper_ids: list | None = None,
+        process_side_effect=None,
+        output_dir: str = "/tmp/test_reports",
+    ) -> tuple[dict, MagicMock]:
+        db = _make_db(paper_rows)
+        with (
+            patch(f"{_MOD}._process_paper", return_value=_no_op_result()) as mock_proc,
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            if process_side_effect is not None:
+                mock_proc.side_effect = process_side_effect
+            counters = run_operational_loop(
+                db,
+                _NOW,
+                paper_ids=paper_ids,
+                max_papers=max_papers,
+                output_dir=output_dir,
+            )
+        return counters, db
+
+    def test_empty_db_returns_zero_counters(self):
+        counters, _ = self._run_loop(paper_rows=[])
+        assert counters["papers_seen"] == 0
+        assert counters["papers_processed"] == 0
+        assert counters["errors"] == []
+        assert counters["errors_count"] == 0
+        assert counters["skipped"] == 0
+
+    def test_single_paper_no_activity_counted_skipped(self):
+        counters, _ = self._run_loop(paper_rows=[_make_paper_row()])
+        assert counters["papers_seen"] == 1
+        assert counters["papers_processed"] == 1
+        assert counters["skipped"] == 1
+
+    def test_single_paper_fully_processed(self):
+        full_result = {
+            "has_reactive_candidate": True,
+            "reactive_draft_created": True,
+            "verdict_eligible": True,
+            "verdict_draft_created": True,
+        }
+        with (
+            patch(f"{_MOD}._process_paper", return_value=full_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(
+                _make_db([_make_paper_row()]), _NOW, output_dir="/tmp/rep"
+            )
+
+        assert counters["papers_seen"] == 1
+        assert counters["papers_processed"] == 1
+        assert counters["reactive_candidates_found"] == 1
+        assert counters["reactive_drafts_created"] == 1
+        assert counters["verdicts_eligible"] == 1
+        assert counters["verdict_drafts_created"] == 1
+        assert counters["skipped"] == 0
+        assert counters["errors"] == []
+        assert counters["errors_count"] == 0
+
+    def test_max_papers_caps_processing(self):
+        rows = [_make_paper_row(f"paper-{i}") for i in range(5)]
+        counters, _ = self._run_loop(paper_rows=rows, max_papers=3)
+        assert counters["papers_seen"] == 5
+        assert counters["papers_processed"] == 3
+
+    def test_paper_ids_passed_to_get_papers(self):
+        ids = ["paper-x", "paper-y"]
+        _, db = self._run_loop(paper_rows=[], paper_ids=ids)
+        db.get_papers.assert_called_once_with(ids)
+
+    def test_none_paper_ids_passed_to_get_papers(self):
+        _, db = self._run_loop(paper_rows=[])
+        db.get_papers.assert_called_once_with(None)
+
+    def test_error_in_process_paper_is_isolated(self):
+        rows = [_make_paper_row("paper-ok"), _make_paper_row("paper-bad")]
+
+        def side_effect(paper, *args, **kwargs):
+            if paper.paper_id == "paper-bad":
+                raise RuntimeError("unexpected failure")
+            return _no_op_result()
+
+        counters, _ = self._run_loop(paper_rows=rows, process_side_effect=side_effect)
+        assert counters["papers_processed"] == 1
+        assert counters["errors_count"] == 1
+        assert len(counters["errors"]) == 1
+
+    def test_summary_path_set_in_counters(self):
+        counters, _ = self._run_loop(paper_rows=[], output_dir="/tmp/my_reports")
+        assert counters["summary_path"].endswith("run_summary.md")
+        assert "my_reports" in counters["summary_path"]
+
+    def test_build_run_summary_called_with_paper_ids(self):
+        ids = ["paper-1"]
+        db = _make_db([])
+        with (
+            patch(f"{_MOD}.build_run_summary", return_value=[]) as mock_brs,
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            run_operational_loop(db, _NOW, paper_ids=ids, output_dir="/tmp/rep")
+        mock_brs.assert_called_once_with(db, _NOW, ids)
+
+    def test_write_markdown_called(self):
+        db = _make_db([])
+        with (
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown") as mock_md,
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            run_operational_loop(db, _NOW, output_dir="/tmp/rep")
+        mock_md.assert_called_once()
+
+    def test_write_jsonl_called(self):
+        db = _make_db([])
+        with (
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl") as mock_jl,
+        ):
+            run_operational_loop(db, _NOW, output_dir="/tmp/rep")
+        mock_jl.assert_called_once()
+
+    def test_verdict_eligible_but_not_drafted_counted_correctly(self):
+        process_result = {
+            "has_reactive_candidate": False,
+            "reactive_draft_created": False,
+            "verdict_eligible": True,
+            "verdict_draft_created": False,
+        }
+        with (
+            patch(f"{_MOD}._process_paper", return_value=process_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(
+                _make_db([_make_paper_row()]), _NOW, output_dir="/tmp/rep"
+            )
+
+        assert counters["verdicts_eligible"] == 1
+        assert counters["verdict_drafts_created"] == 0
+        assert counters["skipped"] == 1
+
+    def test_reactive_only_paper_not_counted_skipped(self):
+        process_result = {
+            "has_reactive_candidate": True,
+            "reactive_draft_created": True,
+            "verdict_eligible": False,
+            "verdict_draft_created": False,
+        }
+        with (
+            patch(f"{_MOD}._process_paper", return_value=process_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(
+                _make_db([_make_paper_row()]), _NOW, output_dir="/tmp/rep"
+            )
+
+        assert counters["reactive_drafts_created"] == 1
+        assert counters["skipped"] == 0
+
+    def test_multiple_papers_aggregate_counters(self):
+        rows = [_make_paper_row(f"paper-{i}") for i in range(4)]
+        results = [
+            {"has_reactive_candidate": True, "reactive_draft_created": True, "verdict_eligible": True, "verdict_draft_created": True},
+            {"has_reactive_candidate": True, "reactive_draft_created": True, "verdict_eligible": False, "verdict_draft_created": False},
+            {"has_reactive_candidate": False, "reactive_draft_created": False, "verdict_eligible": False, "verdict_draft_created": False},
+            {"has_reactive_candidate": False, "reactive_draft_created": False, "verdict_eligible": False, "verdict_draft_created": False},
+        ]
+        call_idx = [0]
+
+        def side_effect(*args, **kwargs):
+            r = results[call_idx[0]]
+            call_idx[0] += 1
+            return r
+
+        counters, _ = self._run_loop(paper_rows=rows, process_side_effect=side_effect)
+
+        assert counters["papers_seen"] == 4
+        assert counters["papers_processed"] == 4
+        assert counters["reactive_candidates_found"] == 2
+        assert counters["reactive_drafts_created"] == 2
+        assert counters["verdicts_eligible"] == 1
+        assert counters["verdict_drafts_created"] == 1
+        assert counters["skipped"] == 2
+        assert counters["errors"] == []
+        assert counters["errors_count"] == 0
+
+    def test_max_papers_none_processes_all(self):
+        rows = [_make_paper_row(f"paper-{i}") for i in range(3)]
+        counters, _ = self._run_loop(paper_rows=rows, max_papers=None)
+        assert counters["papers_processed"] == 3
+
+    def test_papers_seen_always_reflects_full_list(self):
+        rows = [_make_paper_row(f"paper-{i}") for i in range(10)]
+        counters, _ = self._run_loop(paper_rows=rows, max_papers=2)
+        assert counters["papers_seen"] == 10
+        assert counters["papers_processed"] == 2

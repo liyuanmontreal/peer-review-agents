@@ -23,7 +23,7 @@ def _at(hours: float) -> datetime:
 
 def _make(
     has_our_participation: bool = True,
-    distinct_citable_other_agents: int = 5,
+    distinct_citable_other_agents: int = 3,
     audit_artifact_ready: bool = True,
     internal_score_confidence: float = 0.8,
     submitted: bool = False,
@@ -57,19 +57,23 @@ def test_cannot_submit_without_prior_participation():
     assert can_submit_verdict(_make(has_our_participation=False), _NOW_VERDICT) is False
 
 
-def test_cannot_submit_with_4_agents():
-    assert can_submit_verdict(_make(distinct_citable_other_agents=4), _NOW_VERDICT) is False
+def test_cannot_submit_with_2_agents():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=2), _NOW_VERDICT) is False
 
 
 def test_cannot_submit_with_0_agents():
     assert can_submit_verdict(_make(distinct_citable_other_agents=0), _NOW_VERDICT) is False
 
 
-def test_can_submit_with_exactly_5_agents():
-    assert can_submit_verdict(_make(distinct_citable_other_agents=5), _NOW_VERDICT) is True
+def test_can_submit_with_exactly_3_agents():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=3), _NOW_VERDICT) is True
 
 
-def test_can_submit_with_more_than_5_agents():
+def test_can_submit_with_4_agents():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=4), _NOW_VERDICT) is True
+
+
+def test_can_submit_with_more_than_3_agents():
     assert can_submit_verdict(_make(distinct_citable_other_agents=10), _NOW_VERDICT) is True
 
 
@@ -138,10 +142,10 @@ def test_state_not_participated():
 
 def test_state_not_enough_others():
     est, reason = compute_eligibility_state(
-        _make(distinct_citable_other_agents=3), _NOW_VERDICT
+        _make(distinct_citable_other_agents=2), _NOW_VERDICT
     )
     assert est == EligibilityState.PARTICIPATED_BUT_NOT_ENOUGH_OTHERS
-    assert "3" in reason and "5" in reason
+    assert "2" in reason and "3" in reason
 
 
 def test_state_not_in_verdict_window():
@@ -187,9 +191,36 @@ def test_expired_takes_priority_over_skipped():
 # Min constants
 # ---------------------------------------------------------------------------
 
-def test_min_distinct_other_agents_is_5():
-    assert MIN_DISTINCT_OTHER_AGENTS == 5
+def test_min_distinct_other_agents_is_3():
+    assert MIN_DISTINCT_OTHER_AGENTS == 3
 
 
 def test_min_verdict_confidence_is_0_6():
     assert MIN_VERDICT_CONFIDENCE == 0.6
+
+
+# ---------------------------------------------------------------------------
+# Rule change: threshold lowered from 5 → 3 (21-participant field)
+# ---------------------------------------------------------------------------
+
+def test_2_agents_is_not_enough():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=2), _NOW_VERDICT) is False
+
+
+def test_3_agents_is_enough_when_all_other_gates_pass():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=3), _NOW_VERDICT) is True
+
+
+def test_3_agents_produces_eligible_ready_state():
+    est, reason = compute_eligibility_state(_make(distinct_citable_other_agents=3), _NOW_VERDICT)
+    assert est == EligibilityState.ELIGIBLE_READY
+    assert reason == ""
+
+
+def test_2_agents_produces_not_enough_others_state():
+    est, reason = compute_eligibility_state(_make(distinct_citable_other_agents=2), _NOW_VERDICT)
+    assert est == EligibilityState.PARTICIPATED_BUT_NOT_ENOUGH_OTHERS
+
+
+def test_4_agents_is_enough_with_new_threshold():
+    assert can_submit_verdict(_make(distinct_citable_other_agents=4), _NOW_VERDICT) is True

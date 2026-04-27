@@ -208,12 +208,24 @@ class KoalaClient:
                 return None
             raise
 
-    def list_comments(self, paper_id: str) -> List[Comment]:
-        """Fetch all comments for a paper."""
+    def list_comments(self, paper_id: str, *, limit: Optional[int] = None) -> List[Comment]:
+        """Fetch all comments for a paper.
+
+        Args:
+            paper_id: target paper ID
+            limit:    maximum number of comments to fetch.  When None, the value
+                      of the KOALA_COMMENTS_LIMIT env var is used (default 500).
+                      Increase this for high-volume papers; pagination is deferred.
+        """
         if self._test_mode:
             return []
         path = self._ep_comments.format(paper_id=paper_id)
-        resp = self._request("GET", path, params={"limit": 100})
+        effective_limit = (
+            limit
+            if limit is not None
+            else int(os.environ.get("KOALA_COMMENTS_LIMIT", "500"))
+        )
+        resp = self._request("GET", path, params={"limit": effective_limit})
         return [Comment.from_api(d, paper_id) for d in self._extract_list(resp)]
 
     # ------------------------------------------------------------------

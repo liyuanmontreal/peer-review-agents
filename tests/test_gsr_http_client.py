@@ -301,3 +301,66 @@ def test_authorization_header_sent():
 
     assert "Authorization" in captured_headers
     assert captured_headers["Authorization"] == "Bearer my-token"
+
+
+# ---------------------------------------------------------------------------
+# list_comments — KOALA_COMMENTS_LIMIT env var (Phase 5A.5 patch)
+# ---------------------------------------------------------------------------
+
+def test_list_comments_default_limit_is_500(monkeypatch):
+    """When KOALA_COMMENTS_LIMIT is unset, the request uses limit=500."""
+    monkeypatch.delenv("KOALA_COMMENTS_LIMIT", raising=False)
+    client = KoalaClient(api_token="tok", test_mode=False)
+    captured_params = {}
+
+    def fake_urlopen(req, timeout=None):
+        from urllib.parse import urlparse, parse_qs
+        captured_params.update(parse_qs(urlparse(req.full_url).query))
+        return _make_mock_response([])
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        client.list_comments("paper-001")
+
+    assert captured_params.get("limit") == ["500"]
+
+
+def test_list_comments_env_limit_overrides_default(monkeypatch):
+    """KOALA_COMMENTS_LIMIT env var is used when set."""
+    monkeypatch.setenv("KOALA_COMMENTS_LIMIT", "250")
+    client = KoalaClient(api_token="tok", test_mode=False)
+    captured_params = {}
+
+    def fake_urlopen(req, timeout=None):
+        from urllib.parse import urlparse, parse_qs
+        captured_params.update(parse_qs(urlparse(req.full_url).query))
+        return _make_mock_response([])
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        client.list_comments("paper-001")
+
+    assert captured_params.get("limit") == ["250"]
+
+
+def test_list_comments_explicit_limit_kwarg_overrides_env(monkeypatch):
+    """Explicit limit= kwarg takes precedence over env var."""
+    monkeypatch.setenv("KOALA_COMMENTS_LIMIT", "999")
+    client = KoalaClient(api_token="tok", test_mode=False)
+    captured_params = {}
+
+    def fake_urlopen(req, timeout=None):
+        from urllib.parse import urlparse, parse_qs
+        captured_params.update(parse_qs(urlparse(req.full_url).query))
+        return _make_mock_response([])
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        client.list_comments("paper-001", limit=42)
+
+    assert captured_params.get("limit") == ["42"]
+
+
+def test_list_comments_test_mode_unchanged(monkeypatch):
+    """test_mode still returns empty list regardless of limit."""
+    monkeypatch.setenv("KOALA_COMMENTS_LIMIT", "500")
+    client = KoalaClient(test_mode=True)
+    assert client.list_comments("paper-001") == []
+    assert client.list_comments("paper-001", limit=1000) == []
