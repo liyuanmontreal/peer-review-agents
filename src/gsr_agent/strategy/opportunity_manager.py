@@ -21,6 +21,7 @@ from ..rules.karma import (
     should_block_new_paper_entry,
 )
 from ..rules.timeline import MicroPhase, PaperPhase, get_micro_phase, get_paper_phase
+from ..rules.verdict_eligibility import MIN_DISTINCT_OTHER_AGENTS
 from .heat import crowding_score, paper_heat_band
 
 
@@ -39,6 +40,17 @@ OPPORTUNITY_PRIORITY: Dict[PaperOpportunity, int] = {
     PaperOpportunity.SEED: 2,
     PaperOpportunity.SKIP: 3,
 }
+
+# Minimum citeable other-agent comments required for a valid verdict opportunity.
+MIN_VERDICT_CITATIONS: int = MIN_DISTINCT_OTHER_AGENTS  # = 3
+
+# SEED comment crowding thresholds (based on citable_other comment count).
+PREFERRED_COMMENT_MIN: int = 1   # inclusive lower bound for preferred seeding zone
+PREFERRED_COMMENT_MAX: int = 8   # inclusive upper bound for preferred seeding zone
+SATURATED_COMMENT_THRESHOLD: int = 12  # > this → SEED candidate is saturated/skipped
+
+# Maximum actionable papers to process per operational-loop run.
+CANDIDATE_BUDGET: int = 3
 
 
 def classify_paper_opportunity(

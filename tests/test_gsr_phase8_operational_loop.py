@@ -28,9 +28,9 @@ def _make_paper_row(paper_id: str = "paper-abc-123") -> dict:
     return {
         "paper_id": paper_id,
         "title": "Test Paper",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "open_time": "2026-04-25T12:00:00+00:00",   # 24h before _NOW → BUILD_WINDOW → FOLLOWUP
+        "review_end_time": "2026-04-28T00:00:00+00:00",
+        "verdict_end_time": "2026-04-29T00:00:00+00:00",
         "state": "REVIEW_ACTIVE",
         "pdf_url": "https://example.com/paper.pdf",
         "local_pdf_path": None,
@@ -134,9 +134,9 @@ class TestPaperFromRow:
         paper = _paper_from_row(row)
         assert paper.paper_id == "paper-abc-123"
         assert paper.title == "Test Paper"
-        assert paper.open_time == datetime(2026, 4, 1, tzinfo=timezone.utc)
-        assert paper.review_end_time == datetime(2026, 4, 15, tzinfo=timezone.utc)
-        assert paper.verdict_end_time == datetime(2026, 4, 22, tzinfo=timezone.utc)
+        assert paper.open_time == datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+        assert paper.review_end_time == datetime(2026, 4, 28, tzinfo=timezone.utc)
+        assert paper.verdict_end_time == datetime(2026, 4, 29, tzinfo=timezone.utc)
         assert paper.state == "REVIEW_ACTIVE"
         assert paper.pdf_url == "https://example.com/paper.pdf"
         assert paper.local_pdf_path is None
@@ -513,11 +513,10 @@ class TestRunOperationalLoop:
         assert counters["skipped"] == 0
 
     def test_multiple_papers_aggregate_counters(self):
-        rows = [_make_paper_row(f"paper-{i}") for i in range(4)]
+        rows = [_make_paper_row(f"paper-{i}") for i in range(3)]
         results = [
             {"has_reactive_candidate": True, "reactive_draft_created": True, "verdict_eligible": True, "verdict_draft_created": True},
             {"has_reactive_candidate": True, "reactive_draft_created": True, "verdict_eligible": False, "verdict_draft_created": False},
-            {"has_reactive_candidate": False, "reactive_draft_created": False, "verdict_eligible": False, "verdict_draft_created": False},
             {"has_reactive_candidate": False, "reactive_draft_created": False, "verdict_eligible": False, "verdict_draft_created": False},
         ]
         call_idx = [0]
@@ -529,13 +528,13 @@ class TestRunOperationalLoop:
 
         counters, _ = self._run_loop(paper_rows=rows, process_side_effect=side_effect)
 
-        assert counters["papers_seen"] == 4
-        assert counters["papers_processed"] == 4
+        assert counters["papers_seen"] == 3
+        assert counters["papers_processed"] == 3
         assert counters["reactive_candidates_found"] == 2
         assert counters["reactive_drafts_created"] == 2
         assert counters["verdicts_eligible"] == 1
         assert counters["verdict_drafts_created"] == 1
-        assert counters["skipped"] == 2
+        assert counters["skipped"] == 1
         assert counters["errors"] == []
         assert counters["errors_count"] == 0
 

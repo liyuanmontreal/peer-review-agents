@@ -272,3 +272,286 @@ def test_env_inspection_allowed_for_non_secret_vars(code):
     is_safe, reason = check_bash_safety(code)
     assert is_safe, f"Expected {code!r} to be allowed, got blocked: {reason}"
     assert reason == ""
+
+
+# ---------------------------------------------------------------------------
+# Startup hygiene: initial prompt must not direct the agent to read secrets
+# or fetch the full skill guide unconditionally.
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path
+
+_REPO_ROOT = _Path(__file__).parent.parent
+_INITIAL_PROMPT = (_REPO_ROOT / "agent_configs" / "gsr_agent" / "initial_prompt.txt").read_text()
+_GLOBAL_RULES = (_REPO_ROOT / "agent_definition" / "GLOBAL_RULES.md").read_text()
+_PLATFORM_SKILLS = (_REPO_ROOT / "agent_definition" / "platform_skills.md").read_text()
+
+
+def test_initial_prompt_forbids_api_key_file_read():
+    lower = _INITIAL_PROMPT.lower()
+    assert "do not read" in lower and ".api_key" in lower, (
+        "initial_prompt.txt must instruct the agent not to read .api_key directly"
+    )
+
+
+def test_initial_prompt_forbids_env_var_inspection():
+    lower = _INITIAL_PROMPT.lower()
+    assert "do not inspect" in lower or "do not echo" in lower or "do not print" in lower, (
+        "initial_prompt.txt must instruct the agent not to inspect/echo/print API key env vars"
+    )
+
+
+def test_initial_prompt_discourages_unconditional_skill_guide_fetch():
+    assert "do not fetch" in _INITIAL_PROMPT.lower() or "only fetch" in _INITIAL_PROMPT.lower(), (
+        "initial_prompt.txt must discourage fetching skill.md on every startup"
+    )
+
+
+def test_global_rules_discourages_unconditional_skill_guide_fetch():
+    lower = _GLOBAL_RULES.lower()
+    assert "do not fetch" in lower or "fallback" in lower, (
+        "GLOBAL_RULES.md must not instruct unconditional skill.md fetch at startup"
+    )
+
+
+def test_global_rules_forbids_api_key_file_read():
+    lower = _GLOBAL_RULES.lower()
+    assert "do not read" in lower and ".api_key" in lower, (
+        "GLOBAL_RULES.md must instruct the agent not to read .api_key directly"
+    )
+
+
+def test_platform_skills_discourages_unconditional_skill_guide_fetch():
+    lower = _PLATFORM_SKILLS.lower()
+    assert "do not fetch" in lower or "only fetch" in lower or "fallback" in lower, (
+        "platform_skills.md must not instruct unconditional skill.md fetch at startup"
+    )
+
+
+def test_assembled_prompt_includes_local_competition_runtime_rules():
+    from reva.prompt import assemble_prompt
+    import os
+    os.environ.setdefault("KOALA_BASE_URL", "https://koala.science")
+    prompt = assemble_prompt(
+        global_rules_path=_REPO_ROOT / "agent_definition" / "GLOBAL_RULES.md",
+        platform_skills_path=_REPO_ROOT / "agent_definition" / "platform_skills.md",
+        agent_prompt_path=_REPO_ROOT / "agent_definition" / "default_system_prompt.md",
+    )
+    lower = prompt.lower()
+    assert "karma" in lower, "Assembled prompt must include competition runtime rules (karma)"
+    assert "do not fetch" in lower or "fallback" in lower, (
+        "Assembled prompt must include the no-unconditional-skill-fetch rule"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Verdict-first + crowded-paper strategy (Tasks A–G)
+# ---------------------------------------------------------------------------
+
+import logging
+from unittest.mock import MagicMock, patch
+
+from gsr_agent.orchestration.operational_loop import run_operational_loop
+
+_LOOP_MOD = "gsr_agent.orchestration.operational_loop"
+_LOOP_NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=UTC)
+
+
+def _loop_base_result(paper_id: str = "paper-001") -> dict:
+    return {
+        "paper_id": paper_id,
+        "reactive_status": "none",
+        "reactive_reason": None,
+        "reactive_artifact": None,
+        "reactive_live_posted": False,
+        "reactive_live_reason": "no_candidate",
+        "verdict_status": "ineligible",
+        "verdict_reason": None,
+        "verdict_artifact": None,
+        "verdict_live_submitted": False,
+        "verdict_live_reason": "no_eligible_verdict",
+        "has_reactive_candidate": False,
+        "reactive_draft_created": False,
+        "verdict_eligible": False,
+        "verdict_draft_created": False,
+    }
+
+
+def _verdict_paper_row(paper_id: str = "paper-verdict") -> dict:
+    return {
+        "paper_id": paper_id,
+        "title": f"Verdict Paper {paper_id}",
+        "open_time": (_LOOP_NOW - timedelta(hours=62)).isoformat(),
+        "review_end_time": (_LOOP_NOW - timedelta(hours=14)).isoformat(),
+        "verdict_end_time": (_LOOP_NOW + timedelta(hours=10)).isoformat(),
+        "state": "VERDICT_ACTIVE",
+        "pdf_url": "",
+        "local_pdf_path": None,
+    }
+
+
+def _seed_paper_row(paper_id: str = "paper-seed") -> dict:
+    return {
+        "paper_id": paper_id,
+        "title": f"Seed Paper {paper_id}",
+        "open_time": (_LOOP_NOW - timedelta(hours=6)).isoformat(),
+        "review_end_time": (_LOOP_NOW + timedelta(hours=42)).isoformat(),
+        "verdict_end_time": (_LOOP_NOW + timedelta(hours=66)).isoformat(),
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "",
+        "local_pdf_path": None,
+    }
+
+
+def _followup_paper_row(paper_id: str = "paper-followup") -> dict:
+    return {
+        "paper_id": paper_id,
+        "title": f"Followup Paper {paper_id}",
+        "open_time": (_LOOP_NOW - timedelta(hours=24)).isoformat(),
+        "review_end_time": (_LOOP_NOW + timedelta(hours=24)).isoformat(),
+        "verdict_end_time": (_LOOP_NOW + timedelta(hours=48)).isoformat(),
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "",
+        "local_pdf_path": None,
+    }
+
+
+def _make_comp_db(
+    paper_rows: list,
+    participated_ids: set | None = None,
+    comment_counts: dict | None = None,
+) -> MagicMock:
+    if participated_ids is None:
+        participated_ids = set()
+    if comment_counts is None:
+        comment_counts = {}
+    db = MagicMock()
+    db.get_papers.return_value = paper_rows
+    db.has_prior_participation.side_effect = lambda pid: pid in participated_ids
+    db.get_comment_stats.side_effect = lambda pid: {
+        "total": comment_counts.get(pid, 0),
+        "ours": 0,
+        "citable_other": comment_counts.get(pid, 0),
+    }
+    db.has_recent_reactive_action_for_comment.return_value = False
+    db.has_recent_verdict_action_for_paper.return_value = False
+    return db
+
+
+def _run_comp_loop(
+    paper_rows: list,
+    *,
+    participated_ids: set | None = None,
+    comment_counts: dict | None = None,
+) -> tuple[list, dict]:
+    db = _make_comp_db(paper_rows, participated_ids, comment_counts)
+    results = {r["paper_id"]: _loop_base_result(r["paper_id"]) for r in paper_rows}
+    processed: list = []
+
+    def _side(paper, *args, **kwargs):
+        processed.append(paper.paper_id)
+        return results[paper.paper_id]
+
+    with (
+        patch(f"{_LOOP_MOD}._process_paper", side_effect=_side),
+        patch(f"{_LOOP_MOD}.build_run_summary", return_value=[]),
+        patch(f"{_LOOP_MOD}.write_run_summary_markdown"),
+        patch(f"{_LOOP_MOD}.write_run_summary_jsonl"),
+    ):
+        counters = run_operational_loop(db, _LOOP_NOW, output_dir="/tmp/comp_test")
+
+    return processed, counters
+
+
+# G-1: deliberating + 3 citeable outranks in_review SEED
+def test_verdict_with_3_citations_outranks_seed():
+    verdict_row = _verdict_paper_row("pv")
+    seed_row = _seed_paper_row("ps")
+    rows = [seed_row, verdict_row]  # seed listed first in DB
+    processed, _ = _run_comp_loop(
+        rows,
+        participated_ids={"pv"},
+        comment_counts={"pv": 3, "ps": 4},
+    )
+    assert processed[0] == "pv", "verdict paper must be processed before seed paper"
+
+
+# G-2: deliberating + 2 citeable comments → insufficient_verdict_citations skip
+def test_verdict_with_2_citations_skipped(caplog):
+    verdict_row = _verdict_paper_row("pv2")
+    rows = [verdict_row]
+    with caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"):
+        _run_comp_loop(rows, participated_ids={"pv2"}, comment_counts={"pv2": 2})
+    assert any(
+        "insufficient_verdict_citations" in r.message and "count=2" in r.message
+        for r in caplog.records
+    ), "expected insufficient_verdict_citations log with count=2"
+
+
+# G-3: 1–8 comment paper is preferred over 0-comment paper in SEED selection
+def test_preferred_seed_beats_cold_seed():
+    preferred_row = _seed_paper_row("pp")
+    cold_row = _seed_paper_row("pc")
+    rows = [cold_row, preferred_row]  # cold listed first in DB
+    processed, _ = _run_comp_loop(
+        rows,
+        participated_ids=set(),
+        comment_counts={"pp": 4, "pc": 0},
+    )
+    assert processed[0] == "pp", "preferred (4 comments) seed must be processed before cold (0)"
+
+
+# G-4: >12 comments produces saturated_comments skip
+def test_saturated_seed_skipped(caplog):
+    saturated_row = _seed_paper_row("psat")
+    rows = [saturated_row]
+    with caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"):
+        processed, _ = _run_comp_loop(
+            rows,
+            participated_ids=set(),
+            comment_counts={"psat": 13},
+        )
+    assert "psat" not in processed, "saturated paper must not be processed"
+    assert any(
+        "saturated_comments" in r.message and "comment_count=13" in r.message
+        for r in caplog.records
+    ), "expected saturated_comments log with comment_count=13"
+
+
+# G-5: candidate inspection stops at max 3
+def test_candidate_budget_stops_at_3():
+    rows = [_followup_paper_row(f"pfp-{i}") for i in range(5)]
+    processed, _ = _run_comp_loop(
+        rows,
+        participated_ids={r["paper_id"] for r in rows},
+        comment_counts={},
+    )
+    assert len(processed) == 3, f"budget must cap at 3; got {len(processed)}"
+
+
+# G-6: runtime logs include verdict_scan, selected_verdict_candidate, no_viable_verdict_candidates
+def test_runtime_logs_verdict_scan_with_candidate(caplog):
+    rows = [_verdict_paper_row("pvlog")]
+    with caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"):
+        _run_comp_loop(rows, participated_ids={"pvlog"}, comment_counts={"pvlog": 3})
+    messages = [r.message for r in caplog.records]
+    assert any("verdict_scan" in m for m in messages), "expected verdict_scan log"
+    assert any("selected_verdict_candidate" in m for m in messages), (
+        "expected selected_verdict_candidate log"
+    )
+
+
+def test_runtime_logs_no_viable_verdict_candidates(caplog):
+    rows = [_seed_paper_row("pslog")]
+    with caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"):
+        _run_comp_loop(rows, participated_ids=set(), comment_counts={"pslog": 3})
+    messages = [r.message for r in caplog.records]
+    assert any("no_viable_verdict_candidates" in m for m in messages)
+
+
+# G-7: MIN_VERDICT_CITATIONS is 3 in the opportunity_manager live path
+def test_min_verdict_citations_is_3_in_opportunity_manager():
+    from gsr_agent.strategy.opportunity_manager import MIN_VERDICT_CITATIONS
+    assert MIN_VERDICT_CITATIONS == 3
+    from gsr_agent.rules.verdict_eligibility import MIN_DISTINCT_OTHER_AGENTS
+    assert MIN_VERDICT_CITATIONS == MIN_DISTINCT_OTHER_AGENTS

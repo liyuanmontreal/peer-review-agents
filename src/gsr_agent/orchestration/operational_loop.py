@@ -65,6 +65,16 @@ from ..rules.verdict_assembly import (
     select_distinct_other_agent_citations,
 )
 from ..rules.verdict_scoring import VerdictScore
+from ..strategy.opportunity_manager import (
+    CANDIDATE_BUDGET,
+    MIN_VERDICT_CITATIONS,
+    OPPORTUNITY_PRIORITY,
+    PREFERRED_COMMENT_MIN,
+    PREFERRED_COMMENT_MAX,
+    SATURATED_COMMENT_THRESHOLD,
+    PaperOpportunity,
+    classify_paper_opportunity,
+)
 
 if TYPE_CHECKING:
     from ..storage.db import KoalaDB
@@ -609,6 +619,77 @@ def run_operational_loop(
     live_budget_used = False
     verdict_live_budget_used = False
     paper_live_results: dict = {}
+
+    # Pre-classify all papers once for priority-based selection.
+    _classified = []
+    for _row in papers:
+        _p = _paper_from_row(_row)
+        _participated = db.has_prior_participation(_p.paper_id)
+        _opp = classify_paper_opportunity(_p, _participated, karma_remaining, now)
+        _stats = db.get_comment_stats(_p.paper_id)
+        _classified.append((_row, _p, _opp, _stats))
+
+    # Verdict-first scan: identify papers eligible for a verdict this loop.
+    _verdict_valid = []
+    for _r, _p, _o, _s in _classified:
+        if _o != PaperOpportunity.VERDICT_READY:
+            continue
+        _n = _s.get("citable_other", 0)
+        if _n < MIN_VERDICT_CITATIONS:
+            log.info(
+                "[competition] SKIP paper_id=%s reason=insufficient_verdict_citations count=%d required=%d",
+                _p.paper_id, _n, MIN_VERDICT_CITATIONS,
+            )
+        else:
+            _verdict_valid.append((_r, _p, _o, _s))
+
+    log.info(
+        "[competition] verdict_scan papers=%d candidates=%d",
+        len(papers), len(_verdict_valid),
+    )
+    if _verdict_valid:
+        _best_v = _verdict_valid[0]
+        log.info(
+            "[competition] selected_verdict_candidate paper_id=%s citeable_comments=%d",
+            _best_v[1].paper_id,
+            _best_v[3].get("citable_other", 0),
+        )
+    else:
+        log.info("[competition] no_viable_verdict_candidates")
+
+    # Sort by opportunity priority; SEED papers further sorted by crowding.
+    def _sort_key(item):
+        _, _p, _o, _s = item
+        _base = OPPORTUNITY_PRIORITY[_o]
+        if _o == PaperOpportunity.SEED:
+            _n = _s.get("citable_other", 0)
+            if _n > SATURATED_COMMENT_THRESHOLD:
+                return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0)
+            if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
+                return (_base, 0)  # preferred zone
+            if _n == 0:
+                return (_base, 1)  # cold
+            return (_base, 2)  # 9–12: acceptable but below preferred
+        return (_base, 0)
+
+    _sorted = sorted(_classified, key=_sort_key)
+
+    # Filter saturated SEED papers and apply candidate budget.
+    _candidates: list = []
+    for _r, _p, _o, _s in _sorted:
+        if _o == PaperOpportunity.SKIP:
+            continue
+        if _o == PaperOpportunity.SEED and _s.get("citable_other", 0) > SATURATED_COMMENT_THRESHOLD:
+            log.info(
+                "[competition] SKIP paper_id=%s reason=saturated_comments comment_count=%d",
+                _p.paper_id, _s.get("citable_other", 0),
+            )
+            continue
+        _candidates.append(_r)
+
+    _inspected = min(len(_candidates), CANDIDATE_BUDGET)
+    log.info("[competition] candidate_budget inspected=%d max=%d", _inspected, CANDIDATE_BUDGET)
+    papers = _candidates[:CANDIDATE_BUDGET]
 
     for row in papers:
         paper_id = row["paper_id"]

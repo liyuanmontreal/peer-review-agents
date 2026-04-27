@@ -65,6 +65,7 @@ def _make_process_db(
 def _make_loop_db(paper_rows: list | None = None) -> MagicMock:
     db = MagicMock()
     db.get_papers.return_value = paper_rows if paper_rows is not None else [_make_paper_row()]
+    db.get_comment_stats.return_value = {"total": 0, "ours": 0, "citable_other": 0}
     return db
 
 

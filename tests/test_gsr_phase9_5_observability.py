@@ -28,9 +28,9 @@ def _make_paper_row(paper_id: str = "paper-abc-123") -> dict:
     return {
         "paper_id": paper_id,
         "title": "Test Paper",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "open_time": "2026-04-25T12:00:00+00:00",   # 24h before _NOW → BUILD_WINDOW → FOLLOWUP
+        "review_end_time": "2026-04-28T00:00:00+00:00",
+        "verdict_end_time": "2026-04-29T00:00:00+00:00",
         "state": "REVIEW_ACTIVE",
         "pdf_url": "https://example.com/paper.pdf",
         "local_pdf_path": None,
@@ -158,7 +158,7 @@ class TestNewCounters:
         assert counters["reactive_live_eligible"] == 0
 
     def test_multiple_papers_aggregate_correctly(self):
-        rows = [_make_paper_row(f"p-{i}") for i in range(4)]
+        rows = [_make_paper_row(f"p-{i}") for i in range(3)]
         results = [
             {**_base_result(f"p-{i}"),
              "reactive_status": s,
@@ -172,15 +172,13 @@ class TestNewCounters:
                 ("dedup_skipped", "dedup_skipped",        False, True),
                 ("live_posted",   "live_posted",          True,  True),
                 ("dry_run",       "live_budget_exhausted",False, True),
-                ("dry_run",       "live_gate_failed",     False, True),
             ])
         ]
         counters = _run_loop(rows, results, live_reactive=True)
         assert counters["reactive_dedup_skipped"] == 1
         assert counters["reactive_live_posted"] == 1
         assert counters["live_budget_exhausted"] == 1
-        assert counters["reactive_live_gate_failed"] == 1
-        assert counters["reactive_live_eligible"] == 3  # live_posted + budget_exhausted + gate_failed
+        assert counters["reactive_live_eligible"] == 2  # live_posted + budget_exhausted
 
     def test_backward_compat_old_result_without_live_fields(self):
         """Counters must not crash when _process_paper omits Phase 9 live fields."""
