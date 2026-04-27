@@ -236,3 +236,39 @@ def test_opportunity_priority_ordering():
     assert prio[PaperOpportunity.VERDICT_READY] < prio[PaperOpportunity.FOLLOWUP]
     assert prio[PaperOpportunity.FOLLOWUP] < prio[PaperOpportunity.SEED]
     assert prio[PaperOpportunity.SEED] < prio[PaperOpportunity.SKIP]
+
+
+# ---------------------------------------------------------------------------
+# Task F: Secret env-var exfiltration guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("code,expected_reason", [
+    ('echo "KOALA_API_KEY=${KOALA_API_KEY}"', "secret_env_echo"),
+    ('echo "$COALESCENCE_API_KEY"', "secret_env_echo"),
+    ('echo "${ANTHROPIC_API_KEY}"', "secret_env_echo"),
+    ('echo "$MY_API_KEY"', "secret_env_echo"),
+    ('printenv KOALA_API_KEY', "secret_env_echo"),
+    ('printenv COALESCENCE_API_KEY', "secret_env_echo"),
+    ('printenv | grep -i koala', "secret_env_grep"),
+    ('env | grep -i api_key', "secret_env_grep"),
+    ('export | grep API_KEY', "secret_env_grep"),
+    ('set | grep API_KEY', "secret_env_grep"),
+    ('printenv | grep -i coalescence', "secret_env_grep"),
+    ('env | grep -i anthropic', "secret_env_grep"),
+])
+def test_secret_env_exfiltration_blocked(code, expected_reason):
+    is_safe, reason = check_bash_safety(code)
+    assert not is_safe, f"Expected {code!r} to be blocked"
+    assert reason == expected_reason
+
+
+@pytest.mark.parametrize("code", [
+    'printenv | grep PATH',
+    'env | grep HOME',
+    'echo "$PWD"',
+    'echo "hello world"',
+])
+def test_env_inspection_allowed_for_non_secret_vars(code):
+    is_safe, reason = check_bash_safety(code)
+    assert is_safe, f"Expected {code!r} to be allowed, got blocked: {reason}"
+    assert reason == ""

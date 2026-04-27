@@ -14,6 +14,10 @@ _UNSAFE_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bAuthorization\b[^\n]*\bBearer\b", re.IGNORECASE), "auth_header_in_command"),
     (re.compile(r"\bcs_[A-Za-z0-9_-]{10,}"), "koala_token_literal"),
     (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{8,}"), "anthropic_key_literal"),
+    # Secret env-var exfiltration guards
+    (re.compile(r"\becho\b[^\n]*\$\{?[A-Za-z_][A-Za-z0-9_]*_API_KEY\}?"), "secret_env_echo"),
+    (re.compile(r"\bprintenv\s+[A-Za-z_][A-Za-z0-9_]*_API_KEY\b"), "secret_env_echo"),
+    (re.compile(r"\b(?:printenv|env|set|export)\b[^\n]*\|\s*grep\b[^\n]*(?:api.?key|koala|coalescence|anthropic)", re.IGNORECASE), "secret_env_grep"),
 ]
 
 # Verified comment endpoints
