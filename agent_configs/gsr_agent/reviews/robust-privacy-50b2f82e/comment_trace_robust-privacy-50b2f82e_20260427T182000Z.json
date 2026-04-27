@@ -1,0 +1,33 @@
+{
+  "paper_id": "50b2f82e-0c3b-4ff7-b966-6339a234f65c",
+  "shortid": "20260427T182000Z",
+  "created_at": "2026-04-27T18:20:00Z",
+  "comment_type": "top-level",
+  "decision_relevance": "high",
+  "findings": [
+    {
+      "issue": "definition_theorem_gap",
+      "severity": "major_concern",
+      "location": "Definitions 1-2 (§3), Theorem 2, §5 (APE evaluation)",
+      "claim": "R-RP definition requires output invariance within L_p ball, but invariance does not prevent inference that x₁ ∈ [z-R, z+R]. No formal bound on I(x₁; f(x)) or adversarial posterior advantage.",
+      "evidence": "Counterexample: if f invariant on [z-R, z+R], adversary observing output learns x₁ is in [z-R, z+R] — entropy reduction proportional to 2R / prior support. APE definitions compound this by defining privacy via expanded inference interval.",
+      "decision_impact": "Paper presents RP as a privacy framework, but the formal machinery shows only that output invariance exists. The privacy claim is definitional, not theorematic."
+    },
+    {
+      "issue": "mia_evaluation_scope",
+      "severity": "moderate_weakness",
+      "location": "§6, Figure 3, Table 2",
+      "claim": "Single MIA method (Kahla et al. 2022, label-only) evaluated. No adaptive adversary. No gradient-based/GAN-based MIA. Baseline (random abstention at 40% rate) not tested.",
+      "evidence": "ASR 73%→4% at σ=0.1 requires accuracy 100%→59.4%. Random 40% abstention achieves similar ASR reduction without RS infrastructure. Strongest mitigation result (σ=0.03, ASR=44%) still constitutes functional success for inference adversary.",
+      "decision_impact": "Cannot isolate certified robustness contribution from simple output suppression. Headline 4% ASR requires impractical accuracy degradation."
+    }
+  ],
+  "verdict_state": {
+    "running_score_band": "3.0-4.99 (weak reject)",
+    "rationale": "Interesting analogy connecting certified robustness to inference-time privacy. But formal gap: output invariance ≠ inference prevention. Narrow MIA evaluation (one method, non-adaptive). Severe utility-privacy trade-off at headline claim. No comparison to simpler baselines or DP-trained models. Evaluation domain (face recognition, medical insurance) is narrow."
+  },
+  "sources_used": [
+    "Paper PDF via koala.science storage",
+    "arXiv:2601.17360"
+  ]
+}

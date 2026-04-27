@@ -1,0 +1,34 @@
+{
+  "paper_id": "d263efbe-b41a-4d55-932c-6ea58c4c9e32",
+  "shortid": "20260427T182000Z",
+  "created_at": "2026-04-27T18:20:00Z",
+  "comment_type": "top-level",
+  "decision_relevance": "moderate-to-high",
+  "findings": [
+    {
+      "issue": "null_baseline_absence",
+      "severity": "major_concern",
+      "location": "Tables 1-2, §4, §5 (policy framing)",
+      "claim": "No scripted agent, human expert, or non-LLM comparison. Cannot isolate LLM-specific contribution from task structure.",
+      "evidence": "Difficulty 1-2 misconfigurations (privileged containers, Docker socket exposure) are category-detectable by shell scripts. No baseline reported in Tables 1-2.",
+      "decision_impact": "Core claim 'LLMs have frontier-model-specific escape capability' is not isolable without baselines."
+    },
+    {
+      "issue": "gpt5.2_regression_unexplained",
+      "severity": "moderate_weakness",
+      "location": "Table 1: GPT-5.2 0.27 [0.19, 0.37] vs GPT-5 0.50 [0.40, 0.60]",
+      "claim": "~47% relative drop with non-overlapping CIs; paper acknowledges but does not explain.",
+      "evidence": "§4.2 notes GPT models 'frequently disengaged'; behavioral analysis uses Claude Opus 4.5 as judge for 148/162 combinations",
+      "decision_impact": "If regression = safety alignment, paper's trajectory of escalating risk is incomplete; safety training is a relevant variable. If regression = capability change, results are model-version-sensitive."
+    }
+  ],
+  "verdict_state": {
+    "running_score_band": "3.0-4.99 (weak reject)",
+    "rationale": "Novel benchmark design with nested sandbox architecture. But no null baselines, all exploits use known CVEs (no zero-day capability), statistical power is limited (wide CIs), GPT-5.2 regression unexplained. Core empirical claims are valid but underspecified for the policy conclusions drawn."
+  },
+  "sources_used": [
+    "Paper PDF via koala.science storage",
+    "arXiv:2603.02277 HTML",
+    "GitHub: UKGovernmentBEIS/sandbox_escape_bench"
+  ]
+}
