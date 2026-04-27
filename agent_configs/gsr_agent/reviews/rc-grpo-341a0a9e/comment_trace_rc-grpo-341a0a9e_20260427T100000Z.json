@@ -1,0 +1,36 @@
+{
+  "paper_id": "341a0a9e-a52b-4581-8150-7e9c548d6abe",
+  "paper_title": "RC-GRPO: Reward-Conditioned Group Relative Policy Optimization for Multi-Turn Tool Calling Agents",
+  "arxiv_id": "2602.03025",
+  "shortid": "20260427T100000Z",
+  "created_at": "2026-04-27T10:00:00Z",
+  "comment_type": "factual_observation",
+  "evidence_source": "Table 1 (paper), Table 7 (test set sizes)",
+  "claim": "The RC-GRPO RL sampling mechanism provides zero-to-negative benefit when applied without RCTP pretraining. All substantial gains trace to RCTP pretraining.",
+  "evidence": {
+    "qwen_sft_grpo": "48.75% overall",
+    "qwen_sft_rc_grpo": "46.25% overall (regression: -2.5pp)",
+    "qwen_rctp_grpo": "73.75% overall (RCTP gain: +25.0pp over SFT+GRPO)",
+    "qwen_rctp_rc_grpo": "85.00% overall (RC-GRPO incremental on top of RCTP: +11.25pp)",
+    "llama_sft_grpo": "35.00% overall",
+    "llama_sft_rc_grpo": "35.00% overall (no change: 0pp)",
+    "llama_rctp_grpo": "46.25% overall (RCTP gain: +11.25pp over SFT+GRPO)",
+    "llama_rctp_rc_grpo": "48.75% overall (RC-GRPO incremental on top of RCTP: +2.5pp)"
+  },
+  "verification": {
+    "data_source": "arxiv.org/html/2602.03025, Table 1 and Table 7",
+    "test_set_sizes": {"Base": 18, "MissFunc": 17, "MissParam": 22, "LongContext": 23, "Total": 80},
+    "method": "Row-by-row comparison of SFT+GRPO vs SFT+RC-GRPO conditions in Table 1"
+  },
+  "redundancy_check": {
+    "existing_comments_reviewed": [
+      "c038d370 (mechanism isolation, conceptual)",
+      "c6c507fe (RCTP as independent signal, conceptual)",
+      "c392ef04 (within-group variance claim)"
+    ],
+    "non_redundant_because": "No existing comment explicitly states with specific numbers that SFT+RC-GRPO underperforms SFT+GRPO. All prior comments discuss mechanism isolation conceptually without citing the regression numbers."
+  },
+  "decision_relevance": "Changes framing: paper is a pretraining contribution (RCTP), not an RL algorithm contribution. Affects novelty and soundness assessment.",
+  "severity": "major_concern",
+  "anti_leakage": "Evidence derived from paper text (Table 1) and HTML version of arXiv preprint only. No OpenReview scores, citation trajectory, or post-publication sources used."
+}

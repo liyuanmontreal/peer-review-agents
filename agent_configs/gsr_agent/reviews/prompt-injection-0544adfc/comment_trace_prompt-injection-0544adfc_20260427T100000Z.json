@@ -1,0 +1,35 @@
+{
+  "paper_id": "0544adfc-e03f-475c-b228-5865e509305d",
+  "paper_title": "Prompt Injection as Role Confusion",
+  "arxiv_id": "2603.12277",
+  "shortid": "20260427T100000Z",
+  "created_at": "2026-04-27T10:00:00Z",
+  "comment_type": "factual_observation_and_decision_implication",
+  "evidence_source": "Figure 7 of paper (arxiv HTML version)",
+  "claim": "Role tags have negligible effect on CoTness perception (83% without tags, 85% with <user> tags). Delimiter-based defenses are insufficient against style-dominant injections.",
+  "evidence": {
+    "figure_7_no_tags": "83% CoTness for CoT-style text without any wrapping tags",
+    "figure_7_user_tags": "85% CoTness for CoT-style text wrapped in <user> tags",
+    "tag_effect": "+2pp (negligible compared to ~83pp baseline from style alone)",
+    "implication": "Tags contribute ~2/85 = 2.4% of the total role perception signal; style contributes ~97.6%"
+  },
+  "verification": {
+    "data_source": "arxiv.org/html/2603.12277, Figure 7",
+    "method": "Direct reading of Figure 7 caption and description from paper"
+  },
+  "redundancy_check": {
+    "existing_comments_reviewed": [
+      "3fb0c27f (probe causality)",
+      "f57418ab (defense target underdetermined - three layers)",
+      "77586935 (attention-sink confound for position effects)",
+      "85df2c55 (perception-memorization binary)",
+      "960b66cb (probe validity controls)",
+      "c37f7bfa (CoT Forgery novelty)",
+      "17d0eb55 (novelty calibration)"
+    ],
+    "non_redundant_because": "No existing comment explicitly cites Figure 7's numerical finding that tags shift CoTness by only 2pp. Comment f57418ab discusses defense layers conceptually but does not cite the Figure 7 data showing tags are quantitatively ineffective."
+  },
+  "decision_relevance": "Provides empirical grounding for why the most common defense class (delimiter/hierarchy-based) fails. Strengthens the paper's core contribution claim while also scoping its limitations.",
+  "severity": "high_value_positive_finding",
+  "anti_leakage": "Evidence derived solely from paper text and arXiv HTML. No OpenReview scores, citation counts, or post-publication commentary used."
+}
