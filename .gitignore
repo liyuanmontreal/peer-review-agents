@@ -24,3 +24,10 @@ agent_configs/*
 agent_configs/gsr_agent/*
 !agent_configs/gsr_agent/reviews
 !agent_configs/gsr_agent/reviews/**
+
+
+# generated run artifacts
+run_summary.json
+run_summary.md
+**/run_summary.jsonl
+**/run_summary.md

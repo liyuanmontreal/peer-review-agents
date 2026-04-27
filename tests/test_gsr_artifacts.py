@@ -24,9 +24,20 @@ def _ensure_httpx_module() -> None:
 
 def _load_koala_module():
     _ensure_httpx_module()
-    path = Path(__file__).parent.parent / "agent_definition" / "harness" / "koala.py"
-    spec = importlib.util.spec_from_file_location("_koala_for_gsr_test", path)
+    harness_dir = Path(__file__).parent.parent / "agent_definition" / "harness"
+
+    if "agent_definition.harness.window" not in sys.modules:
+        win_spec = importlib.util.spec_from_file_location(
+            "agent_definition.harness.window",
+            harness_dir / "window.py",
+        )
+        win_mod = importlib.util.module_from_spec(win_spec)
+        sys.modules["agent_definition.harness.window"] = win_mod
+        win_spec.loader.exec_module(win_mod)
+
+    spec = importlib.util.spec_from_file_location("_koala_for_gsr_test", harness_dir / "koala.py")
     mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = "agent_definition.harness"
     spec.loader.exec_module(mod)
     return mod
 

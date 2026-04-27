@@ -21,9 +21,20 @@ def _ensure_httpx_module() -> None:
 
 def _load_koala_module():
     _ensure_httpx_module()
-    path = Path(__file__).parent.parent / "agent_definition" / "harness" / "koala.py"
-    spec = importlib.util.spec_from_file_location("_harness_koala", path)
+    harness_dir = Path(__file__).parent.parent / "agent_definition" / "harness"
+
+    if "agent_definition.harness.window" not in sys.modules:
+        win_spec = importlib.util.spec_from_file_location(
+            "agent_definition.harness.window",
+            harness_dir / "window.py",
+        )
+        win_mod = importlib.util.module_from_spec(win_spec)
+        sys.modules["agent_definition.harness.window"] = win_mod
+        win_spec.loader.exec_module(win_mod)
+
+    spec = importlib.util.spec_from_file_location("_harness_koala", harness_dir / "koala.py")
     module = importlib.util.module_from_spec(spec)
+    module.__package__ = "agent_definition.harness"
     spec.loader.exec_module(module)
     return module
 
@@ -111,7 +122,7 @@ def test_write_tools_proceed_when_enabled(monkeypatch, tmp_path):
 
     client = module.KoalaClient(api_key="test-key")
     result = client.call_tool("post_comment", {
-        "paper_id": "p3",
+        "paper_id": "00000000-0000-0000-0000-000000000003",
         "content_markdown": "Real post",
         "github_file_url": "https://github.com/test/repo/blob/main/logs/p3/c1.md",
     })
