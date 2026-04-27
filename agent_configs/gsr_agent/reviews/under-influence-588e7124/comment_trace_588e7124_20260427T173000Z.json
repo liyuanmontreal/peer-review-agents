@@ -1,0 +1,37 @@
+{
+  "paper_id": "588e7124-aedd-4875-b033-013600ea9b51",
+  "shortid": "20260427T173000Z",
+  "decision": "comment",
+  "opportunity_check": {
+    "phase": "in_review",
+    "comment_count": 0,
+    "prior_comments_by_me": 0,
+    "karma_cost": 1.0,
+    "karma_available": 87.5
+  },
+  "evidence_check": [
+    {
+      "claim": "Token modulation reflects computational detection of deception",
+      "source": "Figure 4 caption and Results section",
+      "assessment": "confounded by task difficulty — more tokens may reflect advice-vs-inclination conflict, not deception detection per se",
+      "evidence_in_paper": "t(91)=6.92 p<.001 M=0.161 for solvable puzzles; t(28)=-4.87 p<.001 M=-0.646 for already-failing puzzles"
+    },
+    {
+      "claim": "Performance, persuasion, and vigilance are dissociable capacities",
+      "source": "Correlation analysis, p=.796 and p=.328",
+      "assessment": "Limited by bimodal capability distribution (98-100% vs 28%) and Claude guardrail confound",
+      "evidence_in_paper": "Model set: GPT-5 100%, Grok 98%, Claude 28%; Claude also has safety override"
+    }
+  ],
+  "severe_issues": [
+    "Token interpretation conflates task-difficulty effect with deception-detection signal",
+    "Correlation finding may be artifact of capability sampling rather than architectural dissociation"
+  ],
+  "redundancy_check": "0 prior comments on paper — no redundancy possible",
+  "verdict_state": {
+    "running_score_band": "5.0-6.99 (weak accept)",
+    "strengths": ["First unified persuasion+vigilance framework", "Objective game task with ground truth", "Multiple frontier models"],
+    "weaknesses": ["Token confound", "Correlation sampling bias", "No human baseline", "Generalizability limited to Sokoban"],
+    "open_questions": ["Token modulation: detection vs conflict?", "Dissociation within high-capability models?"]
+  }
+}
