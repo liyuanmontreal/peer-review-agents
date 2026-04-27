@@ -1,0 +1,47 @@
+{
+  "paper_id": "182fa059-9f97-4716-8525-3f5cfa3167a8",
+  "shortid": "20260427T210000Z",
+  "decision_relevant_score": 0.75,
+  "score_band": "weak-accept",
+  "reasoning": {
+    "central_claims": [
+      "AM-μP generalizes μP to heterogeneous multi-path architectures",
+      "Optimal LR scales as L^(-3/2) universally across CNNs, ResNets, Transformers",
+      "Zero-shot cross-depth LR transfer is enabled by the power law"
+    ],
+    "strengths": [
+      "First unified depth-scaling analysis across CNNs, ResNets, Transformers",
+      "Principled AM-μP formalization with merge-consistency axioms",
+      "Extensive empirical confirmation on CIFAR-10/100, ImageNet (3-8% CIFAR deviation)",
+      "Extends μP to depth dimension, filling a genuine gap"
+    ],
+    "issues_found": [
+      {
+        "type": "experimental_gap",
+        "severity": "major",
+        "description": "Zero-shot cross-depth transfer — the headline practical claim — is never validated end-to-end. Experiments show α ≈ -1.5 but never demonstrate that the predicted LR at depth L2 (from LR at depth L1) actually achieves good accuracy.",
+        "paper_location": "Abstract, §1, Figure 3b"
+      },
+      {
+        "type": "anomalous_result",
+        "severity": "major",
+        "description": "ViT-ImageNet exponent is -1.178, a 22% deviation from theoretical -1.5. Most practically important configuration. Unexplained.",
+        "paper_location": "Table 1, §4"
+      },
+      {
+        "type": "proxy_validity",
+        "severity": "moderate",
+        "description": "Grid search uses epoch-1 training loss as optimal LR proxy. Not validated against final accuracy or convergence. Disconnects from practical use case.",
+        "paper_location": "§4.1"
+      },
+      {
+        "type": "theory_practice_gap",
+        "severity": "moderate",
+        "description": "Theory assumes clean initialization without normalization, but BatchNorm raises exponent to -1.701 vs -1.435. Normalized networks are the dominant practice.",
+        "paper_location": "§4.5, Table 3"
+      }
+    ],
+    "novelty_assessment": "Genuine novelty: AM-μP and depth-transfer unify prior μP work across architectures. Builds on Jelassi et al. (2023) for MLPs, extends to multi-path networks. Bordelon & Pehlevan (2025) is concurrent and partially overlapping on residual scaling.",
+    "decision_implication": "Theory and derivations are solid. Practical validation has a central gap (no transfer demonstration). ICML-borderline: likely weak accept if transfer experiments are added, borderline if not."
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "paper_id": "0d8bfac7-ad00-49cf-a49f-5c21647ff855",
+  "shortid": "20260427T210000Z",
+  "decision_relevant_score": 0.65,
+  "score_band": "weak-reject",
+  "reasoning": {
+    "central_claims": [
+      "CUP (cumulative utility parity) is a novel, useful FL fairness criterion",
+      "Inverse-availability sampling + surrogate updates achieve CUP empirically",
+      "Algorithm outperforms q-FFL and PHP-FL on utility fairness metrics"
+    ],
+    "strengths": [
+      "Novel fairness notion: availability-normalized cumulative utility is conceptually sound and addresses a real gap",
+      "Mechanistically motivated algorithm: inverse-availability sampling and surrogate updates are principled",
+      "Real device availability traces used (Yang et al. 2021) — more realistic than synthetic",
+      "55-70% utility CV reduction vs. strong baselines"
+    ],
+    "issues_found": [
+      {
+        "type": "theoretical_incompleteness",
+        "severity": "major",
+        "description": "No finite-sample convergence rate. Lemma 1 and Theorem 1 are asymptotic only. Appendix A Eq. 40 diverges (linear in T). Missing O(1/T^alpha) convergence rate.",
+        "paper_location": "Lemma 1, Theorem 1, Appendix A Eq. 40"
+      },
+      {
+        "type": "experimental_scope",
+        "severity": "major",
+        "description": "Single dataset (CIFAR-10), 100 clients only. No multi-dataset validation. No scalability to 1000+ clients.",
+        "paper_location": "§4, Table 2"
+      },
+      {
+        "type": "missing_baselines",
+        "severity": "moderate",
+        "description": "FedAvg (foundational), Ditto (personalization-based fairness), FairFedCS, FedFV all cited in related work but absent from Table 2. Without FedAvg, accuracy gains are uninterpretable.",
+        "paper_location": "Table 2, §2"
+      },
+      {
+        "type": "missing_ablation",
+        "severity": "moderate",
+        "description": "Surrogate update contribution to fairness not isolated from inverse-availability sampling contribution.",
+        "paper_location": "Table 1-2"
+      }
+    ],
+    "novelty_assessment": "CUP is orthogonal to per-round fairness (q-FFL, PHP-FL) and addresses a real gap: participation heterogeneity in long-term utility. Principled and genuinely novel. Algorithm builds on standard inverse-weighting ideas but applies them to the CUP criterion.",
+    "decision_implication": "Borderline reject: novel fairness notion but theoretical contribution is incomplete without finite-sample rates. Single-dataset, small-scale experiments insufficient for ICML. Likely major revision needed."
+  }
+}
