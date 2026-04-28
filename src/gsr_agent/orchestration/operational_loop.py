@@ -757,11 +757,15 @@ def run_operational_loop(
         _participated = db.has_prior_participation(_p.paper_id)
         _opp = classify_paper_opportunity(_p, _participated, karma_remaining, now)
         _stats = db.get_comment_stats(_p.paper_id)
-        _classified.append((_row, _p, _opp, _stats))
+        _recent_seed = (
+            _opp == PaperOpportunity.SEED
+            and db.has_recent_seed_action_for_paper(_p.paper_id, now)
+        )
+        _classified.append((_row, _p, _opp, _stats, _recent_seed))
 
     # Verdict opportunity scan: deliberating + VERDICT_READY papers.
     _verdict_opportunities: list[dict] = []
-    for _r, _p, _o, _s in _classified:
+    for _r, _p, _o, _s, _ in _classified:
         _is_verdict_phase = (
             _o == PaperOpportunity.VERDICT_READY
             or _p.state == "deliberating"
@@ -797,7 +801,7 @@ def run_operational_loop(
 
     _verdict_valid = [
         (_r, _p, _o, _s)
-        for _r, _p, _o, _s in _classified
+        for _r, _p, _o, _s, _ in _classified
         if _o == PaperOpportunity.VERDICT_READY
         and _s.get("citable_other", 0) >= MIN_VERDICT_CITATIONS
     ]
@@ -832,24 +836,25 @@ def run_operational_loop(
 
     # Sort by opportunity priority; SEED papers further sorted by total comment crowding.
     def _sort_key(item):
-        _, _p, _o, _s = item
+        _, _p, _o, _s, _recent = item
         _base = OPPORTUNITY_PRIORITY[_o]
         if _o == PaperOpportunity.SEED:
             _n = _s.get("total", 0)
             if _n > SATURATED_COMMENT_THRESHOLD:
-                return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0)
+                return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
+            _r = 1 if _recent else 0
             if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
-                return (_base, 0)  # preferred zone
+                return (_base, _r, 0)  # preferred zone; fresh before recent_action
             if _n == 0:
-                return (_base, 1)  # cold
-            return (_base, 2)  # 9–12: acceptable but below preferred
-        return (_base, 0)
+                return (_base, _r, 1)  # cold
+            return (_base, _r, 2)  # 9–12: acceptable but below preferred
+        return (_base, 0, 0)
 
     _sorted = sorted(_classified, key=_sort_key)
 
     # Filter SEED papers by crowding thresholds and apply candidate budget.
     _candidates: list = []
-    for _r, _p, _o, _s in _sorted:
+    for _r, _p, _o, _s, _ in _sorted:
         if _o == PaperOpportunity.SKIP:
             continue
         _n = _s.get("total", 0)
@@ -882,7 +887,7 @@ def run_operational_loop(
     if _auto_verdict_paper_id is not None:
         if not any(r["paper_id"] == _auto_verdict_paper_id for r in papers):
             _auto_row = next(
-                (_r for _r, _p, _o, _s in _classified if _p.paper_id == _auto_verdict_paper_id),
+                (_r for _r, _p, _o, _s, _ in _classified if _p.paper_id == _auto_verdict_paper_id),
                 None,
             )
             if _auto_row is not None:

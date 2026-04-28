@@ -591,6 +591,7 @@ def _run_seed_loop(rows: list, total_comments: int) -> dict:
     db.has_prior_participation.return_value = False
     db.has_recent_reactive_action_for_comment.return_value = False
     db.has_recent_verdict_action_for_paper.return_value = False
+    db.has_recent_seed_action_for_paper.return_value = False
 
     with (
         patch(f"{_MOD}._process_paper", return_value=_no_op_result()),
@@ -644,6 +645,66 @@ class TestNewSeedWindowCandidateSelection:
         counters = _run_seed_loop(rows, total_comments=5)
         assert CANDIDATE_BUDGET == 8
         assert counters["papers_processed"] == CANDIDATE_BUDGET
+
+
+
+# ---------------------------------------------------------------------------
+# TestSeedCandidateRankingRecentAction
+# ---------------------------------------------------------------------------
+
+def _run_seed_loop_with_recent(
+    rows: list, total_comments: int, recent_seed_ids: set
+) -> tuple[dict, list]:
+    """Returns (counters, processed_paper_ids_in_order)."""
+    db = MagicMock()
+    db.get_papers.return_value = rows
+    db.get_comment_stats.return_value = {"total": total_comments, "ours": 0, "citable_other": 0}
+    db.has_prior_participation.return_value = False
+    db.has_recent_reactive_action_for_comment.return_value = False
+    db.has_recent_verdict_action_for_paper.return_value = False
+    db.has_recent_seed_action_for_paper.side_effect = lambda pid, now: pid in recent_seed_ids
+
+    processed_ids: list = []
+
+    def _capture(paper, *args, **kwargs):
+        processed_ids.append(paper.paper_id)
+        return {**_no_op_result(), "paper_id": paper.paper_id}
+
+    with (
+        patch(f"{_MOD}._process_paper", side_effect=_capture),
+        patch(f"{_MOD}.build_run_summary", return_value=[]),
+        patch(f"{_MOD}.write_run_summary_markdown"),
+        patch(f"{_MOD}.write_run_summary_jsonl"),
+    ):
+        counters = run_operational_loop(db, _NOW, output_dir="/tmp/test_seed_rank")
+    return counters, processed_ids
+
+
+class TestSeedCandidateRankingRecentAction:
+    def test_fresh_seed_ranked_before_recent_action(self):
+        """Fresh SEED candidates are processed before recent_action ones."""
+        recent_ids = {"paper-ra-000", "paper-ra-001"}
+        fresh_ids = {"paper-ra-002", "paper-ra-003"}
+        rows = [_make_review_active_seed_row(pid) for pid in [*sorted(recent_ids), *sorted(fresh_ids)]]
+        _, processed = _run_seed_loop_with_recent(rows, total_comments=5, recent_seed_ids=recent_ids)
+        first_recent = next((i for i, pid in enumerate(processed) if pid in recent_ids), len(processed))
+        last_fresh = max((i for i, pid in enumerate(processed) if pid in fresh_ids), default=-1)
+        assert last_fresh < first_recent
+
+    def test_recent_action_does_not_consume_budget_when_fresh_exists(self):
+        """8 recent_action papers + 1 fresh: fresh paper must be processed."""
+        recent_ids = {f"paper-ra-{i:03d}" for i in range(8)}
+        fresh_id = "paper-fresh-000"
+        rows = [_make_review_active_seed_row(pid) for pid in [*sorted(recent_ids), fresh_id]]
+        _, processed = _run_seed_loop_with_recent(rows, total_comments=5, recent_seed_ids=recent_ids)
+        assert fresh_id in processed
+
+    def test_only_recent_action_candidates_no_error(self):
+        """When only recent_action SEED candidates exist, loop runs cleanly."""
+        recent_ids = {"paper-ra-000", "paper-ra-001"}
+        rows = [_make_review_active_seed_row(pid) for pid in recent_ids]
+        counters, _ = _run_seed_loop_with_recent(rows, total_comments=5, recent_seed_ids=recent_ids)
+        assert counters["errors_count"] == 0
 
 
 # ---------------------------------------------------------------------------
