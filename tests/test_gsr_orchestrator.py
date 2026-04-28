@@ -54,8 +54,9 @@ def test_plan_and_post_returns_comment_id():
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
     )
-    assert result is not None
-    assert isinstance(result, str)
+    assert result[0] is not None
+    assert isinstance(result[0], str)
+    assert result[1] is None
 
 
 def test_plan_and_post_calls_post_comment():
@@ -110,7 +111,8 @@ def test_returns_none_when_not_in_seed_window():
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=50.0, now=_NOW_BUILD, test_mode=True
     )
-    assert result is None
+    assert result[0] is None
+    assert result[1] == "seed_plan_not_seed_opportunity"
     assert not client.post_comment.called
 
 
@@ -122,7 +124,8 @@ def test_returns_none_when_already_participated():
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
     )
-    assert result is None
+    assert result[0] is None
+    assert result[1] == "seed_plan_not_seed_opportunity"
 
 
 def test_returns_none_when_no_karma():
@@ -132,7 +135,8 @@ def test_returns_none_when_no_karma():
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=0.0, now=_NOW_SEED, test_mode=True
     )
-    assert result is None
+    assert result[0] is None
+    assert result[1] == "seed_plan_not_seed_opportunity"
 
 
 def test_returns_none_when_no_abstract():
@@ -142,7 +146,8 @@ def test_returns_none_when_no_abstract():
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
     )
-    assert result is None
+    assert result[0] is None
+    assert result[1] == "seed_plan_missing_abstract"
     assert not client.post_comment.called
 
 
@@ -161,3 +166,61 @@ def test_post_comment_receives_valid_github_url():
     github_url = call_args[0][2]
     assert github_url.startswith("https://github.com/")
     assert not github_url.startswith("TODO:")
+
+# ---------------------------------------------------------------------------
+# Phase:NEW preflight fix — pre-open papers in SEED_WINDOW must not raise
+# ---------------------------------------------------------------------------
+
+def _make_pre_open_paper(
+    abstract: str = "We propose a novel method for faster gradient estimation.",
+) -> Paper:
+    """open_time is 2h in the future: Phase=NEW, Micro=SEED_WINDOW."""
+    from gsr_agent.rules.timeline import compute_paper_windows
+    _future_open = datetime(2026, 4, 24, 14, 0, 0, tzinfo=UTC)  # 2h after _NOW_BUILD baseline
+    _now_pre_open = _future_open - timedelta(hours=2)
+    w = compute_paper_windows(_future_open)
+    return Paper(
+        paper_id="paper-new-001",
+        title="Pre-Open Seed Paper",
+        open_time=w.open_time,
+        review_end_time=w.review_end_time,
+        verdict_end_time=w.verdict_end_time,
+        state="REVIEW_ACTIVE",
+        abstract=abstract,
+    ), _now_pre_open
+
+
+def test_pre_open_paper_does_not_raise_preflight():
+    """Phase:NEW paper (now < open_time) in SEED_WINDOW must not raise KoalaPreflightError."""
+    paper, now_pre_open = _make_pre_open_paper()
+    client = _make_client()
+    db = _make_db()
+    # Should NOT raise; should return a comment id
+    result = plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=now_pre_open, test_mode=True
+    )
+    assert result[0] is not None
+
+
+def test_pre_open_paper_creates_seed_comment():
+    """Phase:NEW paper calls post_comment on the stub client."""
+    paper, now_pre_open = _make_pre_open_paper()
+    client = _make_client()
+    db = _make_db()
+    plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=now_pre_open, test_mode=True
+    )
+    assert client.post_comment.called
+
+
+def test_pre_open_paper_no_abstract_returns_none():
+    """Phase:NEW paper with no abstract returns seed_plan_missing_abstract."""
+    paper, now_pre_open = _make_pre_open_paper(abstract="")
+    client = _make_client()
+    db = _make_db()
+    result = plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=now_pre_open, test_mode=True
+    )
+    assert result[0] is None
+    assert result[1] == "seed_plan_missing_abstract"
+    assert not client.post_comment.called

@@ -178,6 +178,7 @@ def _paper_from_row(row: dict) -> Paper:
     return Paper(
         paper_id=row["paper_id"],
         title=row.get("title", ""),
+        abstract=row.get("abstract", ""),
         open_time=_parse_dt(row.get("open_time", "")),
         review_end_time=_parse_dt(row.get("review_end_time", "")),
         verdict_end_time=_parse_dt(row.get("verdict_end_time", "")),
@@ -487,8 +488,9 @@ def _process_paper(
                 seed_live_reason = "seed_gate_window"
 
             if live_seed_allowed:
+                _seed_id, _skip_reason = None, None
                 try:
-                    _seed_id = plan_and_post_seed_comment(
+                    _seed_id, _skip_reason = plan_and_post_seed_comment(
                         paper, live_client, db, karma_remaining, now, test_mode=False
                     )
                 except KoalaWindowClosedError:
@@ -496,20 +498,19 @@ def _process_paper(
                         "[window] paper=%s 409_window_closed tool=post_seed_comment",
                         paper.paper_id,
                     )
-                    _seed_id = None
                     seed_live_reason = "window_closed"
                 if _seed_id is not None:
                     seed_live_posted = True
                     seed_live_reason = "live_posted"
                     log.info("[competition] seed_live_posted paper_id=%s", paper.paper_id)
                 elif seed_live_reason != "window_closed":
-                    seed_live_reason = "live_gate_failed"
+                    seed_live_reason = _skip_reason or "live_gate_failed"
                     log.info(
-                        "[competition] seed_skipped paper_id=%s reason=live_gate_failed",
-                        paper.paper_id,
+                        "[competition] seed_skipped paper_id=%s reason=%s",
+                        paper.paper_id, seed_live_reason,
                     )
             else:
-                _seed_id = plan_and_post_seed_comment(
+                _seed_id, _skip_reason = plan_and_post_seed_comment(
                     paper, client, db, karma_remaining, now, test_mode=test_mode
                 )
                 if _seed_id is not None:

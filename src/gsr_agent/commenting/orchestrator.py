@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from ..adapters.gsr_runner import index_paper_for_koala
 from ..artifacts.github import (
@@ -32,6 +32,7 @@ from ..artifacts.github import (
 from ..koala.models import Paper
 from ..rules.karma import get_action_cost
 from ..rules.preflight import CommentPreflightInput, preflight_comment_action
+from ..rules.timeline import PaperPhase, get_paper_phase
 from ..strategy.opportunity_manager import PaperOpportunity, classify_paper_opportunity
 from .reactive_analysis import ReactiveAnalysisResult
 from .seed_comment import choose_best_seed_comment, generate_seed_comment_candidates
@@ -51,7 +52,7 @@ def plan_and_post_seed_comment(
     now: datetime,
     *,
     test_mode: bool = False,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """Plan and post a seed comment on a paper if conditions are met.
 
     Steps:
@@ -62,7 +63,7 @@ def plan_and_post_seed_comment(
       5. Run preflight checks (loose tier).
       6. Enforce run mode:
            test_mode=True → proceed with stub client.
-           dry_run        → log intent and return None (no real write).
+           dry_run        → log intent and return (None, "dry_run") (no real write).
            live           → run strict artifact validation, then post.
       7. Post comment via Koala client.
       8. Log action and karma in local DB with audit metadata.
@@ -76,28 +77,37 @@ def plan_and_post_seed_comment(
         test_mode:        if True, use fake artifact URL and stub client calls
 
     Returns:
-        The created comment ID on success, None if conditions not met or dry_run.
+        (comment_id, None) on success.
+        (None, skip_reason) when conditions not met or dry_run, where skip_reason is one of:
+          seed_plan_not_seed_opportunity, seed_plan_missing_abstract,
+          seed_plan_empty_draft, seed_plan_artifact_failed, dry_run.
     """
     has_participated = db.has_prior_participation(paper.paper_id)
 
     opp = classify_paper_opportunity(paper, has_participated, karma_remaining, now)
     if opp != PaperOpportunity.SEED:
-        log.debug(
-            "[orchestrator] skipping paper=%s opportunity=%s", paper.paper_id, opp.value
+        log.info(
+            "[competition] seed_skipped paper_id=%s reason=seed_plan_not_seed_opportunity opp=%s",
+            paper.paper_id, opp.value,
         )
-        return None
+        return None, "seed_plan_not_seed_opportunity"
 
     index = index_paper_for_koala(paper)
     candidates = generate_seed_comment_candidates(index)
     if not candidates:
         log.info(
-            "[orchestrator] no seed candidates for paper=%s (no abstract?)", paper.paper_id
+            "[competition] seed_skipped paper_id=%s reason=seed_plan_missing_abstract",
+            paper.paper_id,
         )
-        return None
+        return None, "seed_plan_missing_abstract"
 
     body = choose_best_seed_comment(candidates)
     if not body:
-        return None
+        log.info(
+            "[competition] seed_skipped paper_id=%s reason=seed_plan_empty_draft",
+            paper.paper_id,
+        )
+        return None, "seed_plan_empty_draft"
 
     # Determine run mode and artifact publish mode.
     # test_mode=True always uses fake URL. dry_run also uses fake URL so that
@@ -110,13 +120,17 @@ def plan_and_post_seed_comment(
     )
 
     # Loose preflight (phase, karma, body, placeholder URL).
+    # Pre-open papers (Phase.NEW, now < open_time) are in the SEED_WINDOW by
+    # definition; pass open_time as now so the phase gate sees REVIEW_ACTIVE
+    # while all other checks (karma, artifact, moderation) run normally.
+    _pf_now = now if get_paper_phase(now, paper.open_time) != PaperPhase.NEW else paper.open_time
     preflight_comment_action(
         CommentPreflightInput(
             paper_id=paper.paper_id,
             body=body,
             github_file_url=github_file_url,
             open_time=paper.open_time,
-            now=now,
+            now=_pf_now,
             karma_remaining=karma_remaining,
             has_prior_participation=has_participated,
         )
@@ -127,8 +141,7 @@ def plan_and_post_seed_comment(
     # Dry-run gate: log intent and return without writing to Koala.
     if not test_mode and run_mode != "live":
         log.info(
-            "[orchestrator] dry_run: would post seed comment for paper=%s "
-            "run_mode=%r github_url=%s",
+            "[competition] seed_skipped paper_id=%s reason=dry_run run_mode=%r github_url=%s",
             paper.paper_id, run_mode, github_file_url,
         )
         db.log_action(
@@ -145,7 +158,7 @@ def plan_and_post_seed_comment(
                 "blocked_reason": f"KOALA_RUN_MODE={run_mode!r}",
             },
         )
-        return None
+        return None, "dry_run"
 
     # Live gate: strict artifact validation before any external write.
     if not test_mode:
@@ -186,7 +199,7 @@ def plan_and_post_seed_comment(
         "[orchestrator] posted seed comment id=%s on paper=%s karma_cost=%.1f run_mode=%s",
         comment_id, paper.paper_id, cost, run_mode,
     )
-    return comment_id
+    return comment_id, None
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS koala_papers (
     paper_id            TEXT PRIMARY KEY,
     title               TEXT NOT NULL DEFAULT '',
+    abstract            TEXT NOT NULL DEFAULT '',
     open_time           TEXT NOT NULL,                  -- ISO-8601 UTC
     review_end_time     TEXT NOT NULL,                  -- ISO-8601 UTC
     verdict_end_time    TEXT NOT NULL,                  -- ISO-8601 UTC

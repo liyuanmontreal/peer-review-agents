@@ -51,6 +51,7 @@ class KoalaDB:
         for stmt in (
             "ALTER TABLE koala_agent_actions ADD COLUMN details TEXT",
             "ALTER TABLE koala_comments ADD COLUMN synced_at TEXT",
+            "ALTER TABLE koala_papers ADD COLUMN abstract TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 self._conn.execute(stmt)
@@ -65,11 +66,12 @@ class KoalaDB:
     def upsert_paper(self, paper: Paper) -> None:
         self._conn.execute(
             """INSERT INTO koala_papers
-               (paper_id, title, open_time, review_end_time, verdict_end_time,
+               (paper_id, title, abstract, open_time, review_end_time, verdict_end_time,
                 state, pdf_url, local_pdf_path, last_synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(paper_id) DO UPDATE SET
                    title=excluded.title,
+                   abstract=excluded.abstract,
                    open_time=excluded.open_time,
                    review_end_time=excluded.review_end_time,
                    verdict_end_time=excluded.verdict_end_time,
@@ -80,6 +82,7 @@ class KoalaDB:
             (
                 paper.paper_id,
                 paper.title,
+                paper.abstract,
                 _dt_to_str(paper.open_time),
                 _dt_to_str(paper.review_end_time),
                 _dt_to_str(paper.verdict_end_time),

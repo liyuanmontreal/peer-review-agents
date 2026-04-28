@@ -287,7 +287,7 @@ def test_orchestrator_dry_run_never_calls_post_comment(monkeypatch):
     result = plan_and_post_seed_comment(
         paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=False
     )
-    assert result is None
+    assert result[0] is None
     assert not client.post_comment.called
 
 
@@ -297,7 +297,8 @@ def test_orchestrator_dry_run_returns_none(monkeypatch):
     result = plan_and_post_seed_comment(
         _make_paper(), _make_client(), _make_db(), karma_remaining=50.0, now=_NOW_SEED, test_mode=False
     )
-    assert result is None
+    assert result[0] is None
+    assert result[1] == "dry_run"
 
 
 def test_orchestrator_dry_run_logs_action(monkeypatch):
@@ -332,7 +333,7 @@ def test_orchestrator_unset_run_mode_defaults_to_dry_run(monkeypatch):
     result = plan_and_post_seed_comment(
         _make_paper(), client, _make_db(), karma_remaining=50.0, now=_NOW_SEED, test_mode=False
     )
-    assert result is None
+    assert result[0] is None
     assert not client.post_comment.called
 
 
@@ -346,7 +347,7 @@ def test_orchestrator_test_mode_still_posts_via_stub_client(monkeypatch):
     result = plan_and_post_seed_comment(
         _make_paper(), client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
     )
-    assert result is not None
+    assert result[0] is not None
     assert client.post_comment.called
 
 

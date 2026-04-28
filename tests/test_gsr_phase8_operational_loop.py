@@ -555,11 +555,12 @@ class TestRunOperationalLoop:
 # TestNewSeedWindowCandidateSelection
 # ---------------------------------------------------------------------------
 
-def _make_new_seed_row(paper_id: str = "paper-new-001") -> dict:
+def _make_new_seed_row(paper_id: str = "paper-new-001", *, abstract: str = "") -> dict:
     """Paper where open_time is 2h in the future: Phase=NEW, Micro=SEED_WINDOW."""
     return {
         "paper_id": paper_id,
         "title": "New Seed Paper",
+        "abstract": abstract,
         "open_time": (_NOW + timedelta(hours=2)).isoformat(),
         "review_end_time": (_NOW + timedelta(hours=50)).isoformat(),
         "verdict_end_time": (_NOW + timedelta(hours=74)).isoformat(),
@@ -652,7 +653,7 @@ class TestSeedCommentPath:
             patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-001") as mock_seed,
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=("dry-run-seed-001", None)) as mock_seed,
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
@@ -672,7 +673,7 @@ class TestSeedCommentPath:
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
             patch(f"{_MOD}.get_run_mode", return_value="live"),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="live-seed-cmt-001") as mock_seed,
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=("live-seed-cmt-001", None)) as mock_seed,
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
@@ -795,7 +796,7 @@ class TestNewSeedWindowSeedPath:
             patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-new") as mock_seed,
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=("dry-run-seed-new", None)) as mock_seed,
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
@@ -811,7 +812,7 @@ class TestNewSeedWindowSeedPath:
             patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-state-new") as mock_seed,
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=("dry-run-seed-state-new", None)) as mock_seed,
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
@@ -826,7 +827,7 @@ class TestNewSeedWindowSeedPath:
             patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=None),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=(None, "seed_plan_missing_abstract")),
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
@@ -897,7 +898,7 @@ class TestSeedLiveGate:
             patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
             patch(f"{_MOD}.get_run_mode", return_value="live"),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="live-seed-new-001"),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=("live-seed-new-001", None)),
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
@@ -919,7 +920,7 @@ class TestSeedLiveGate:
             patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
             patch(f"{_MOD}.get_run_mode", return_value="live"),
             patch(f"{_MOD}.classify_paper_opportunity", return_value=PaperOpportunity.SEED),
-            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=None),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=(None, "seed_plan_missing_abstract")),
         ):
             result = _process_paper(
                 paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
@@ -944,4 +945,81 @@ class TestSeedLiveGate:
                 live_client=None,
             )
         assert result["seed_live_reason"] == "seed_gate_no_client"
+        assert result["seed_live_posted"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestSeedPlannerIntegration — end-to-end seed planner with real function
+# ---------------------------------------------------------------------------
+
+class TestSeedPlannerIntegration:
+    """Verify plan_and_post_seed_comment returns non-None for valid candidates
+    and specific seed_plan_* reasons for skip paths (no mocking of the planner)."""
+
+    def _make_db(self):
+        db = MagicMock()
+        db.has_prior_participation.return_value = False
+        return db
+
+    def _make_client(self):
+        client = MagicMock()
+        client.post_comment.return_value = "comment-integration-001"
+        return client
+
+    def test_new_seed_window_with_abstract_returns_non_none(self):
+        """NEW+SEED_WINDOW paper with abstract returns non-None from seed planner."""
+        from gsr_agent.commenting.orchestrator import plan_and_post_seed_comment
+        row = _make_new_seed_row(abstract="We propose a novel gradient estimation method.")
+        paper = _paper_from_row(row)
+        comment_id, skip_reason = plan_and_post_seed_comment(
+            paper, self._make_client(), self._make_db(), karma_remaining=50.0,
+            now=_NOW, test_mode=True,
+        )
+        assert comment_id is not None
+        assert skip_reason is None
+
+    def test_missing_abstract_returns_seed_plan_missing_abstract(self):
+        """Paper with empty abstract returns (None, 'seed_plan_missing_abstract')."""
+        from gsr_agent.commenting.orchestrator import plan_and_post_seed_comment
+        row = _make_new_seed_row(abstract="")
+        paper = _paper_from_row(row)
+        comment_id, skip_reason = plan_and_post_seed_comment(
+            paper, self._make_client(), self._make_db(), karma_remaining=50.0,
+            now=_NOW, test_mode=True,
+        )
+        assert comment_id is None
+        assert skip_reason == "seed_plan_missing_abstract"
+
+    def test_seed_planner_does_not_reject_new_seed_window_candidates(self):
+        """seed planner classifies NEW+SEED_WINDOW as SEED, not SKIP."""
+        from gsr_agent.commenting.orchestrator import plan_and_post_seed_comment
+        row = _make_new_seed_row(abstract="A study of large language models for code generation.")
+        paper = _paper_from_row(row)
+        comment_id, skip_reason = plan_and_post_seed_comment(
+            paper, self._make_client(), self._make_db(), karma_remaining=50.0,
+            now=_NOW, test_mode=True,
+        )
+        assert skip_reason != "seed_plan_not_seed_opportunity", (
+            "seed planner wrongly rejected a NEW+SEED_WINDOW candidate as not a seed opportunity"
+        )
+        assert comment_id is not None
+
+    def test_live_gate_failed_replaced_by_specific_reason_in_operational_loop(self):
+        """operational_loop seed_live_reason shows seed_plan_* not generic live_gate_failed."""
+        row = _make_new_seed_row(abstract="")  # no abstract → seed_plan_missing_abstract
+        paper = _paper_from_row(row)
+        live_client = MagicMock()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False, live_reactive=True, live_budget_remaining=1,
+                live_client=live_client,
+            )
+        assert result["seed_live_reason"] == "seed_plan_missing_abstract"
+        assert result["seed_live_reason"] != "live_gate_failed"
         assert result["seed_live_posted"] is False
