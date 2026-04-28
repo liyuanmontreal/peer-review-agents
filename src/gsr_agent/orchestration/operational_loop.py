@@ -543,6 +543,28 @@ def _process_paper(
     }
 
 
+def _write_verdict_opportunities_report(
+    opportunities: list[dict],
+    out_dir: Path,
+) -> str:
+    """Write verdict_opportunities.md; return path string."""
+    path = out_dir / "verdict_opportunities.md"
+    lines = ["# Verdict Opportunities\n\n"]
+    if not opportunities:
+        lines.append("No verdict opportunities found this run.\n")
+    else:
+        lines.append("| paper_id | title | phase | citeable | own_comment | action |\n")
+        lines.append("|----------|-------|-------|----------|-------------|--------|\n")
+        for opp in opportunities:
+            lines.append(
+                f"| {opp['paper_id']} | {opp['title'][:40]} | {opp['phase']}"
+                f" | {opp['citeable_count']} | {'Y' if opp['has_own_comment'] else 'N'}"
+                f" | {opp['recommended_action']} |\n"
+            )
+    path.write_text("".join(lines))
+    return str(path)
+
+
 def run_operational_loop(
     db: "KoalaDB",
     now: datetime,
@@ -576,6 +598,9 @@ def run_operational_loop(
         length. ``live_reactive_posts`` and ``live_verdict_submissions`` count actual
         live actions taken this run.
     """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     client = _DryRunClient()
 
     live_client: Optional[Any] = None
@@ -631,20 +656,48 @@ def run_operational_loop(
         _stats = db.get_comment_stats(_p.paper_id)
         _classified.append((_row, _p, _opp, _stats))
 
-    # Verdict-first scan: identify papers eligible for a verdict this loop.
-    _verdict_valid = []
+    # Verdict opportunity scan: deliberating + VERDICT_READY papers.
+    _verdict_opportunities: list[dict] = []
     for _r, _p, _o, _s in _classified:
-        if _o != PaperOpportunity.VERDICT_READY:
+        _is_verdict_phase = (
+            _o == PaperOpportunity.VERDICT_READY
+            or _p.state == "deliberating"
+            or _p.deliberating_at is not None
+        )
+        if not _is_verdict_phase:
             continue
-        _n = _s.get("citable_other", 0)
-        if _n < MIN_VERDICT_CITATIONS:
+        _citable_n = _s.get("citable_other", 0)
+        _has_own = db.has_prior_participation(_p.paper_id)
+        if _citable_n < MIN_VERDICT_CITATIONS:
             log.info(
-                "[competition] SKIP paper_id=%s reason=insufficient_verdict_citations count=%d required=%d",
-                _p.paper_id, _n, MIN_VERDICT_CITATIONS,
+                "[competition] verdict_blocked paper_id=%s reason=insufficient_citations count=%d required=%d",
+                _p.paper_id, _citable_n, MIN_VERDICT_CITATIONS,
+            )
+        elif not _has_own:
+            log.info(
+                "[competition] verdict_blocked paper_id=%s reason=no_prior_own_comment",
+                _p.paper_id,
             )
         else:
-            _verdict_valid.append((_r, _p, _o, _s))
+            log.info(
+                "[competition] verdict_ready paper_id=%s citeable_comments=%d ours=Y",
+                _p.paper_id, _citable_n,
+            )
+            _verdict_opportunities.append({
+                "paper_id": _p.paper_id,
+                "title": _p.title,
+                "phase": _p.state,
+                "citeable_count": _citable_n,
+                "has_own_comment": True,
+                "recommended_action": "submit_verdict",
+            })
 
+    _verdict_valid = [
+        (_r, _p, _o, _s)
+        for _r, _p, _o, _s in _classified
+        if _o == PaperOpportunity.VERDICT_READY
+        and _s.get("citable_other", 0) >= MIN_VERDICT_CITATIONS
+    ]
     log.info(
         "[competition] verdict_scan papers=%d candidates=%d",
         len(papers), len(_verdict_valid),
@@ -658,6 +711,7 @@ def run_operational_loop(
         )
     else:
         log.info("[competition] no_viable_verdict_candidates")
+    _write_verdict_opportunities_report(_verdict_opportunities, out_dir)
 
     # Sort by opportunity priority; SEED papers further sorted by crowding.
     def _sort_key(item):
@@ -676,17 +730,31 @@ def run_operational_loop(
 
     _sorted = sorted(_classified, key=_sort_key)
 
-    # Filter saturated SEED papers and apply candidate budget.
+    # Filter SEED papers by crowding thresholds and apply candidate budget.
     _candidates: list = []
     for _r, _p, _o, _s in _sorted:
         if _o == PaperOpportunity.SKIP:
             continue
-        if _o == PaperOpportunity.SEED and _s.get("citable_other", 0) > SATURATED_COMMENT_THRESHOLD:
-            log.info(
-                "[competition] SKIP paper_id=%s reason=saturated_comments comment_count=%d",
-                _p.paper_id, _s.get("citable_other", 0),
-            )
-            continue
+        _n = _s.get("citable_other", 0)
+        if _o == PaperOpportunity.SEED:
+            if _n > SATURATED_COMMENT_THRESHOLD:
+                log.info(
+                    "[competition] SKIP paper_id=%s reason=saturated_comments comment_count=%d",
+                    _p.paper_id, _n,
+                )
+                continue
+            if _n == 0:
+                log.info(
+                    "[competition] SKIP paper_id=%s reason=skip_too_cold comment_count=%d",
+                    _p.paper_id, _n,
+                )
+                continue
+            if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
+                log.info(
+                    "[competition] seed_candidate_preferred_band paper_id=%s comment_count=%d",
+                    _p.paper_id, _n,
+                )
+            log.info("[competition] selected_seed_candidate paper_id=%s", _p.paper_id)
         _candidates.append(_r)
 
     _inspected = min(len(_candidates), CANDIDATE_BUDGET)
@@ -775,7 +843,6 @@ def run_operational_loop(
         counters["errors_count"],
     )
 
-    out_dir = Path(output_dir)
     summary = build_run_summary(db, now, paper_ids)
     for entry in summary:
         if entry["paper_id"] in paper_live_results:
