@@ -550,5 +550,27 @@ class KoalaDB:
         ).fetchone()
         return row is not None
 
+    def has_recent_seed_action_for_paper(
+        self,
+        paper_id: str,
+        now: datetime,
+        *,
+        within_hours: float = 12.0,
+        statuses: tuple = ("dry_run", "success"),
+    ) -> bool:
+        """Return True if a seed_comment action already exists for this paper recently."""
+        cutoff = (now - timedelta(hours=within_hours)).astimezone(timezone.utc).isoformat()
+        placeholders = ",".join("?" * len(statuses))
+        row = self._conn.execute(
+            f"""SELECT 1 FROM koala_agent_actions
+                WHERE paper_id=?
+                  AND action_type='seed_comment'
+                  AND status IN ({placeholders})
+                  AND created_at >= ?
+                LIMIT 1""",
+            (paper_id, *statuses, cutoff),
+        ).fetchone()
+        return row is not None
+
     def close(self) -> None:
         self._conn.close()

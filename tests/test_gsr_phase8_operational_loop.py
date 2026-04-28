@@ -626,3 +626,147 @@ class TestNewSeedWindowCandidateSelection:
         rows = [_make_new_seed_row(f"paper-new-{i:03d}") for i in range(5)]
         counters = _run_seed_loop(rows, total_comments=5)
         assert 0 < counters["papers_processed"] <= CANDIDATE_BUDGET
+
+
+# ---------------------------------------------------------------------------
+# TestSeedCommentPath
+# ---------------------------------------------------------------------------
+
+def _make_seed_process_db(*, seed_dedup: bool = False) -> MagicMock:
+    db = MagicMock()
+    db.has_recent_reactive_action_for_comment.return_value = False
+    db.has_recent_verdict_action_for_paper.return_value = False
+    db.has_recent_seed_action_for_paper.return_value = seed_dedup
+    db.has_prior_participation.return_value = False
+    return db
+
+
+class TestSeedCommentPath:
+    def _make_seed_paper(self) -> "Paper":
+        return _paper_from_row(_make_review_active_seed_row())
+
+    def test_seed_paper_creates_draft_when_no_reactive_candidate(self):
+        """SEED paper with no reactive candidate creates a seed draft."""
+        paper = self._make_seed_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-001") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        mock_seed.assert_called_once()
+        assert result["seed_draft_created"] is True
+        assert result["seed_live_posted"] is False
+        assert result["reactive_draft_created"] is False
+
+    def test_seed_paper_live_posts_when_live_reactive_enabled(self):
+        """Live-reactive SEED paper posts at most one live seed comment."""
+        paper = self._make_seed_paper()
+        live_client = MagicMock()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="live-seed-cmt-001") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False,
+                live_reactive=True,
+                live_budget_remaining=1,
+                live_client=live_client,
+            )
+
+        mock_seed.assert_called_once()
+        assert result["seed_live_posted"] is True
+        assert result["seed_draft_created"] is False
+
+    def test_seed_dedup_blocks_post(self):
+        """Recent seed action prevents seed draft/post."""
+        paper = self._make_seed_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(seed_dedup=True), 100.0, _NOW,
+                test_mode=True,
+            )
+
+        mock_seed.assert_not_called()
+        assert result["seed_draft_created"] is False
+        assert result["seed_live_posted"] is False
+
+    def test_reactive_candidate_takes_precedence_over_seed(self):
+        """When a reactive candidate exists, seed path is not entered."""
+        paper = self._make_seed_paper()
+        candidate = ReactiveAnalysisResult(
+            comment_id="cmt-other-001",
+            paper_id=paper.paper_id,
+            recommendation="react",
+            draft_text="[DRY-RUN — not posted]\n\nReactive draft.",
+        )
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="dry-run-react-001"),
+            patch(f"{_MOD}.plan_and_post_seed_comment") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        mock_seed.assert_not_called()
+        assert result["reactive_draft_created"] is True
+        assert result["seed_draft_created"] is False
+
+    def test_counters_reflect_seed_draft(self):
+        """seed_drafts_created increments for seed draft; live_reactive_posts for live seed post."""
+        row = _make_review_active_seed_row()
+        db = MagicMock()
+        db.get_papers.return_value = [row]
+        db.has_recent_reactive_action_for_comment.return_value = False
+        db.has_recent_verdict_action_for_paper.return_value = False
+        db.has_recent_seed_action_for_paper.return_value = False
+        db.has_prior_participation.return_value = False
+        db.get_comment_stats.return_value = {"total": 5, "ours": 0, "citable_other": 0}
+
+        seed_result = {
+            "paper_id": row["paper_id"],
+            "reactive_status": "none",
+            "reactive_reason": None,
+            "reactive_artifact": None,
+            "reactive_live_posted": False,
+            "reactive_live_reason": "no_candidate",
+            "verdict_status": "ineligible",
+            "verdict_reason": None,
+            "verdict_artifact": None,
+            "verdict_live_submitted": False,
+            "verdict_live_reason": "no_eligible_verdict",
+            "has_reactive_candidate": False,
+            "reactive_draft_created": False,
+            "verdict_eligible": False,
+            "verdict_draft_created": False,
+            "seed_draft_created": True,
+            "seed_live_posted": False,
+        }
+        with (
+            patch(f"{_MOD}._process_paper", return_value=seed_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(db, _NOW, output_dir="/tmp/test_seed_counters")
+
+        assert counters["seed_drafts_created"] == 1
+        assert counters["reactive_drafts_created"] == 0
+        assert counters["live_reactive_posts"] == 0
+        assert counters["skipped"] == 0

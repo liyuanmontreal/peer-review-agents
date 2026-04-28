@@ -52,7 +52,7 @@ from ..artifacts.github import (
     publish_verdict_artifact,
     validate_artifact_for_live_action,
 )
-from ..commenting.orchestrator import plan_and_post_reactive_comment
+from ..commenting.orchestrator import plan_and_post_reactive_comment, plan_and_post_seed_comment
 from ..koala.errors import KoalaWindowClosedError
 from ..commenting.reactive_analysis import (
     analyze_reactive_candidates_for_paper,
@@ -439,6 +439,64 @@ def _process_paper(
         log.info("[loop] REACTIVE paper=%s status=%s", paper.paper_id, reactive_status)
 
     # ---------------------------------------------------------------------------
+    # Seed comment path — when no reactive candidate and paper is in SEED window
+    # ---------------------------------------------------------------------------
+    seed_draft_created = False
+    seed_live_posted = False
+
+    if candidate is None and comment_phase_ok:
+        _participated = db.has_prior_participation(paper.paper_id)
+        _opp = classify_paper_opportunity(paper, _participated, karma_remaining, now)
+        if _opp == PaperOpportunity.SEED:
+            if db.has_recent_seed_action_for_paper(paper.paper_id, now):
+                log.info(
+                    "[competition] seed_skipped paper_id=%s reason=recent_action",
+                    paper.paper_id,
+                )
+            else:
+                env_run_mode_s = get_run_mode() if not test_mode else "test"
+                live_seed_allowed = (
+                    live_reactive
+                    and not test_mode
+                    and env_run_mode_s == "live"
+                    and live_budget_remaining > 0
+                    and live_client is not None
+                )
+                if live_seed_allowed:
+                    try:
+                        _seed_id = plan_and_post_seed_comment(
+                            paper, live_client, db, karma_remaining, now, test_mode=False
+                        )
+                    except KoalaWindowClosedError:
+                        log.warning(
+                            "[window] paper=%s 409_window_closed tool=post_seed_comment",
+                            paper.paper_id,
+                        )
+                        _seed_id = None
+                    if _seed_id is not None:
+                        seed_live_posted = True
+                        log.info("[competition] seed_live_posted paper_id=%s", paper.paper_id)
+                    else:
+                        log.info(
+                            "[competition] seed_skipped paper_id=%s reason=live_gate_failed",
+                            paper.paper_id,
+                        )
+                else:
+                    _seed_id = plan_and_post_seed_comment(
+                        paper, client, db, karma_remaining, now, test_mode=test_mode
+                    )
+                    if _seed_id is not None:
+                        seed_draft_created = True
+                        log.info(
+                            "[competition] seed_draft_created paper_id=%s", paper.paper_id
+                        )
+                    else:
+                        log.info(
+                            "[competition] seed_skipped paper_id=%s reason=no_candidates",
+                            paper.paper_id,
+                        )
+
+    # ---------------------------------------------------------------------------
     # Verdict path — dry-run by default; live only when all gates pass.
     # submit_verdict is never called unless live_verdict_allowed is True.
     # ---------------------------------------------------------------------------
@@ -550,6 +608,8 @@ def _process_paper(
         "reactive_draft_created": reactive_status == "dry_run",
         "verdict_eligible": eligibility.eligible,
         "verdict_draft_created": verdict_status == "dry_run",
+        "seed_draft_created": seed_draft_created,
+        "seed_live_posted": seed_live_posted,
     }
 
 
@@ -643,6 +703,7 @@ def run_operational_loop(
         "verdict_drafts_created": 0,
         "live_reactive_posts": 0,
         "live_verdict_submissions": 0,
+        "seed_drafts_created": 0,
         "verdict_live_missing_score": 0,
         "verdict_live_invalid_score": 0,
         # Phase 9.5 observability counters
@@ -833,6 +894,11 @@ def run_operational_loop(
                 live_budget_used = True
                 counters["live_reactive_posts"] += 1
                 counters["reactive_live_posted"] += 1
+            if result.get("seed_draft_created"):
+                counters["seed_drafts_created"] += 1
+            if result.get("seed_live_posted"):
+                live_budget_used = True
+                counters["live_reactive_posts"] += 1
             if live_reason == "live_budget_exhausted":
                 counters["live_budget_exhausted"] += 1
             if live_reason == "live_gate_failed":
@@ -862,7 +928,12 @@ def run_operational_loop(
 
             if result.get("window_skipped"):
                 counters["window_skipped"] += 1
-            elif not result["reactive_draft_created"] and not result["verdict_draft_created"]:
+            elif (
+                not result["reactive_draft_created"]
+                and not result["verdict_draft_created"]
+                and not result.get("seed_draft_created")
+                and not result.get("seed_live_posted")
+            ):
                 counters["skipped"] += 1
 
             paper_live_results[paper_id] = {
