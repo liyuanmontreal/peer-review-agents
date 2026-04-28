@@ -89,6 +89,7 @@ def _make_process_db(
     db = MagicMock()
     db.has_recent_reactive_action_for_comment.return_value = reactive_dedup
     db.has_recent_verdict_action_for_paper.return_value = verdict_dedup
+    db.get_comment_stats.return_value = {"total": 0, "ours": 0, "citable_other": 0}
     return db
 
 
@@ -717,6 +718,7 @@ def _make_seed_process_db(*, seed_dedup: bool = False) -> MagicMock:
     db.has_recent_verdict_action_for_paper.return_value = False
     db.has_recent_seed_action_for_paper.return_value = seed_dedup
     db.has_prior_participation.return_value = False
+    db.get_comment_stats.return_value = {"total": 5, "ours": 0, "citable_other": 5}
     return db
 
 
@@ -1122,3 +1124,31 @@ class TestSeedPlannerIntegration:
         assert result["seed_live_reason"] == "seed_plan_missing_abstract"
         assert result["seed_live_reason"] != "live_gate_failed"
         assert result["seed_live_posted"] is False
+
+
+# ---------------------------------------------------------------------------
+# TestDecisionDiagnostics — [competition] decision log line
+# ---------------------------------------------------------------------------
+
+class TestDecisionDiagnostics:
+    def test_decision_log_includes_seed_reason(self, caplog):
+        """_process_paper emits a [competition] decision line with seed_reason."""
+        import logging
+        paper = _paper_from_row(_make_review_active_seed_row())
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=(None, "seed_plan_low_signal")),
+            caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"),
+        ):
+            _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        decision_lines = [r.message for r in caplog.records if "[competition] decision" in r.message]
+        assert decision_lines, "Expected a [competition] decision log line"
+        line = decision_lines[0]
+        assert "seed_reason=" in line
+        assert "seed_status=" in line
+        assert "paper_id=" in line

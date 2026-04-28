@@ -294,6 +294,7 @@ def _process_paper(
     now: datetime,
     test_mode: bool,
     *,
+    opportunity: Optional["PaperOpportunity"] = None,
     live_reactive: bool = False,
     live_budget_remaining: int = 0,
     live_client: Optional[Any] = None,
@@ -319,6 +320,10 @@ def _process_paper(
     phase_window = compute_phase_window(
         now, paper.state, paper.open_time, paper.deliberating_at
     )
+    _stats_for_log = db.get_comment_stats(paper.paper_id)
+    _micro_for_log = get_micro_phase(now, paper.open_time).value
+    _has_seed_candidate_log = False
+    _recent_seed_log = False
     comment_phase_ok = (
         phase_window.phase == "comment" and phase_window.seconds_left > SAFETY_BUFFER_S
     )
@@ -456,9 +461,11 @@ def _process_paper(
     if candidate is None and (comment_phase_ok or seed_window_ok):
         _participated = db.has_prior_participation(paper.paper_id)
         _opp = classify_paper_opportunity(paper, _participated, karma_remaining, now)
+        _has_seed_candidate_log = (_opp == PaperOpportunity.SEED)
         if _opp != PaperOpportunity.SEED:
             seed_live_reason = "no_candidate"
         elif db.has_recent_seed_action_for_paper(paper.paper_id, now):
+            _recent_seed_log = True
             seed_live_reason = "recent_action"
             log.info(
                 "[competition] seed_skipped paper_id=%s reason=recent_action",
@@ -617,6 +624,31 @@ def _process_paper(
     else:
         log.info("[loop] VERDICT paper=%s status=%s", paper.paper_id, verdict_status)
 
+    _seed_status_log = (
+        "live_posted" if seed_live_posted
+        else "draft_created" if seed_draft_created
+        else "no_candidate" if seed_live_reason == "no_candidate"
+        else "skipped"
+    )
+    log.info(
+        "[competition] decision paper_id=%s opportunity=%s phase=%s micro=%s "
+        "total_comments=%s recent_seed=%s has_seed_candidate=%s "
+        "seed_status=%s seed_reason=%s reactive_status=%s reactive_reason=%s "
+        "verdict_status=%s verdict_reason=%s",
+        paper.paper_id,
+        opportunity.value if opportunity is not None else "unknown",
+        phase_window.phase,
+        _micro_for_log,
+        _stats_for_log.get("total", 0),
+        _recent_seed_log,
+        _has_seed_candidate_log,
+        _seed_status_log,
+        seed_live_reason,
+        reactive_status,
+        reactive_reason or reactive_live_reason,
+        verdict_status,
+        verdict_reason or verdict_live_reason,
+    )
     return {
         "paper_id": paper.paper_id,
         "reactive_status": reactive_status,
@@ -637,6 +669,7 @@ def _process_paper(
         "seed_draft_created": seed_draft_created,
         "seed_live_posted": seed_live_posted,
         "seed_live_reason": seed_live_reason,
+        "opportunity": opportunity,
     }
 
 
@@ -741,6 +774,14 @@ def run_operational_loop(
         "reactive_live_gate_failed": 0,
         "skipped": 0,
         "window_skipped": 0,
+        # Seed decision counters
+        "seed_posted": 0,
+        "no_seed_candidate": 0,
+        "seed_skipped_recent_action": 0,
+        "seed_skipped_low_signal": 0,
+        "seed_skipped_missing_abstract": 0,
+        "seed_skipped_moderation": 0,
+        "seed_skipped_live_gate": 0,
         "errors": [],
         "errors_count": 0,
         "summary_path": "",
@@ -851,6 +892,7 @@ def run_operational_loop(
         return (_base, 0, 0)
 
     _sorted = sorted(_classified, key=_sort_key)
+    _opp_by_id = {_p.paper_id: _o for _, _p, _o, _, _ in _classified}
 
     # Filter SEED papers by crowding thresholds and apply candidate budget.
     _candidates: list = []
@@ -904,6 +946,7 @@ def run_operational_loop(
             _paper_allowlisted = allowlisted or _is_auto_candidate
             result = _process_paper(
                 paper, client, db, karma_remaining, now, test_mode,
+                opportunity=_opp_by_id.get(paper_id),
                 live_reactive=live_reactive,
                 live_budget_remaining=live_budget_remaining,
                 live_client=live_client,
@@ -931,6 +974,21 @@ def run_operational_loop(
             if result.get("seed_live_posted"):
                 live_budget_used = True
                 counters["live_reactive_posts"] += 1
+            _seed_reason = result.get("seed_live_reason")
+            if _seed_reason == "live_posted":
+                counters["seed_posted"] += 1
+            elif _seed_reason == "no_candidate":
+                counters["no_seed_candidate"] += 1
+            elif _seed_reason == "recent_action":
+                counters["seed_skipped_recent_action"] += 1
+            elif _seed_reason in ("seed_plan_low_signal", "seed_plan_empty_draft"):
+                counters["seed_skipped_low_signal"] += 1
+            elif _seed_reason == "seed_plan_missing_abstract":
+                counters["seed_skipped_missing_abstract"] += 1
+            elif _seed_reason == "seed_plan_moderation_low_effort":
+                counters["seed_skipped_moderation"] += 1
+            elif _seed_reason not in (None, "draft_created"):
+                counters["seed_skipped_live_gate"] += 1
             if live_reason == "live_budget_exhausted":
                 counters["live_budget_exhausted"] += 1
             if live_reason == "live_gate_failed":
@@ -998,6 +1056,18 @@ def run_operational_loop(
         counters["verdict_drafts_created"],
         counters["live_verdict_submissions"],
         counters["errors_count"],
+    )
+    log.info(
+        "[loop] seed_summary seed_posted=%d no_candidate=%d "
+        "skipped_recent=%d skipped_low_signal=%d skipped_missing_abstract=%d "
+        "skipped_moderation=%d skipped_live_gate=%d",
+        counters["seed_posted"],
+        counters["no_seed_candidate"],
+        counters["seed_skipped_recent_action"],
+        counters["seed_skipped_low_signal"],
+        counters["seed_skipped_missing_abstract"],
+        counters["seed_skipped_moderation"],
+        counters["seed_skipped_live_gate"],
     )
 
     summary = build_run_summary(db, now, paper_ids)
