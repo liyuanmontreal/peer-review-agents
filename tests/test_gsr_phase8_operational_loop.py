@@ -15,7 +15,7 @@ from gsr_agent.orchestration.operational_loop import (
     run_operational_loop,
 )
 from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
-from gsr_agent.strategy.opportunity_manager import CANDIDATE_BUDGET
+from gsr_agent.strategy.opportunity_manager import CANDIDATE_BUDGET, PaperOpportunity
 
 _MOD = "gsr_agent.orchestration.operational_loop"
 _NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -770,3 +770,178 @@ class TestSeedCommentPath:
         assert counters["reactive_drafts_created"] == 0
         assert counters["live_reactive_posts"] == 0
         assert counters["skipped"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestNewSeedWindowSeedPath  (fix verification)
+# ---------------------------------------------------------------------------
+
+class TestNewSeedWindowSeedPath:
+    """Verify that Phase=NEW + SEED_WINDOW papers enter and complete the seed path."""
+
+    def _make_new_seed_paper(self) -> "Paper":
+        """open_time 2h in future → Phase=NEW, Micro=SEED_WINDOW, state=REVIEW_ACTIVE."""
+        return _paper_from_row(_make_new_seed_row())
+
+    def _make_new_seed_paper_state_new(self) -> "Paper":
+        """Same timing but state='NEW' (schema default) — comment_phase_ok would be False."""
+        row = {**_make_new_seed_row(), "state": "NEW"}
+        return _paper_from_row(row)
+
+    def test_new_phase_enters_seed_path(self):
+        """NEW+SEED_WINDOW paper (state=REVIEW_ACTIVE) creates a seed draft."""
+        paper = self._make_new_seed_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-new") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+        mock_seed.assert_called_once()
+        assert result["seed_draft_created"] is True
+        assert result["seed_live_reason"] == "draft_created"
+
+    def test_new_phase_state_new_enters_seed_path(self):
+        """NEW+SEED_WINDOW paper with state='NEW' (seed_window_ok) still enters seed path."""
+        paper = self._make_new_seed_paper_state_new()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="dry-run-seed-state-new") as mock_seed,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+        mock_seed.assert_called_once()
+        assert result["seed_draft_created"] is True
+
+    def test_seed_live_reason_populated_in_result(self):
+        """seed_live_reason field is returned from _process_paper."""
+        paper = self._make_new_seed_paper()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=None),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+        assert "seed_live_reason" in result
+        assert result["seed_draft_created"] is False
+
+    def test_live_posts_increments_for_seed(self):
+        """live_reactive_posts counter increments when seed_live_posted is True."""
+        row = _make_new_seed_row()
+        db = MagicMock()
+        db.get_papers.return_value = [row]
+        db.has_recent_reactive_action_for_comment.return_value = False
+        db.has_recent_verdict_action_for_paper.return_value = False
+        db.has_recent_seed_action_for_paper.return_value = False
+        db.has_prior_participation.return_value = False
+        db.get_comment_stats.return_value = {"total": 5, "ours": 0, "citable_other": 0}
+
+        seed_live_result = {
+            "paper_id": row["paper_id"],
+            "reactive_status": "none",
+            "reactive_reason": None,
+            "reactive_artifact": None,
+            "reactive_live_posted": False,
+            "reactive_live_reason": "no_candidate",
+            "verdict_status": "ineligible",
+            "verdict_reason": None,
+            "verdict_artifact": None,
+            "verdict_live_submitted": False,
+            "verdict_live_reason": "no_eligible_verdict",
+            "has_reactive_candidate": False,
+            "reactive_draft_created": False,
+            "verdict_eligible": False,
+            "verdict_draft_created": False,
+            "seed_draft_created": False,
+            "seed_live_posted": True,
+            "seed_live_reason": "live_posted",
+        }
+        with (
+            patch(f"{_MOD}._process_paper", return_value=seed_live_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(db, _NOW, output_dir="/tmp/test_seed_live_ctr")
+
+        assert counters["live_reactive_posts"] == 1
+        assert counters["seed_drafts_created"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestSeedLiveGate — granular gate reason codes
+# ---------------------------------------------------------------------------
+
+class TestSeedLiveGate:
+    """seed_gate_* reason codes and live-post path for NEW+SEED_WINDOW papers."""
+
+    def _make_new_seed_paper_state_new(self) -> "Paper":
+        row = {**_make_new_seed_row(), "state": "NEW"}
+        return _paper_from_row(row)
+
+    def test_new_seed_window_live_posts_when_all_gates_pass(self):
+        """NEW+SEED_WINDOW live seed candidate posts when all gates pass."""
+        paper = self._make_new_seed_paper_state_new()
+        live_client = MagicMock()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value="live-seed-new-001"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False, live_reactive=True, live_budget_remaining=1,
+                live_client=live_client,
+            )
+        assert result["seed_live_posted"] is True
+        assert result["seed_live_reason"] == "live_posted"
+
+    def test_seed_gate_window_when_not_in_seed_window(self):
+        """seed_gate_window when paper is in comment phase but not SEED_WINDOW."""
+        # Paper opened 15h ago: comment_phase_ok=True, micro=BUILD_WINDOW, seed_window_ok=False.
+        row = {**_make_review_active_seed_row(), "open_time": (_NOW - timedelta(hours=15)).isoformat()}
+        paper = _paper_from_row(row)
+        live_client = MagicMock()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_MOD}.classify_paper_opportunity", return_value=PaperOpportunity.SEED),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=None),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False, live_reactive=True, live_budget_remaining=1,
+                live_client=live_client,
+            )
+        assert result["seed_live_reason"] == "seed_gate_window"
+        assert result["seed_live_posted"] is False
+
+    def test_seed_gate_no_client_when_live_client_absent(self):
+        """seed_gate_no_client when live_client is None."""
+        paper = self._make_new_seed_paper_state_new()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False, live_reactive=True, live_budget_remaining=1,
+                live_client=None,
+            )
+        assert result["seed_live_reason"] == "seed_gate_no_client"
+        assert result["seed_live_posted"] is False

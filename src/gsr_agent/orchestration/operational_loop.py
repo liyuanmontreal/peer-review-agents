@@ -64,7 +64,7 @@ from ..reporting.run_summary import (
     write_run_summary_jsonl,
     write_run_summary_markdown,
 )
-from ..rules.timeline import SAFETY_BUFFER_S, compute_phase_window
+from ..rules.timeline import SAFETY_BUFFER_S, MicroPhase, compute_phase_window, get_micro_phase
 from ..rules.verdict_assembly import (
     VerdictEligibilityResult,
     build_verdict_draft_for_paper,
@@ -443,58 +443,83 @@ def _process_paper(
     # ---------------------------------------------------------------------------
     seed_draft_created = False
     seed_live_posted = False
+    seed_live_reason: Optional[str] = None
 
-    if candidate is None and comment_phase_ok:
+    # Allow seed path when micro-phase is SEED_WINDOW even if comment_phase_ok
+    # is False (e.g. paper.state == "NEW" from schema default makes
+    # compute_phase_window return "expired").
+    seed_window_ok = (
+        get_micro_phase(now, paper.open_time) == MicroPhase.SEED_WINDOW
+        and phase_window.seconds_left > SAFETY_BUFFER_S
+    )
+    if candidate is None and (comment_phase_ok or seed_window_ok):
         _participated = db.has_prior_participation(paper.paper_id)
         _opp = classify_paper_opportunity(paper, _participated, karma_remaining, now)
-        if _opp == PaperOpportunity.SEED:
-            if db.has_recent_seed_action_for_paper(paper.paper_id, now):
-                log.info(
-                    "[competition] seed_skipped paper_id=%s reason=recent_action",
-                    paper.paper_id,
-                )
-            else:
-                env_run_mode_s = get_run_mode() if not test_mode else "test"
-                live_seed_allowed = (
-                    live_reactive
-                    and not test_mode
-                    and env_run_mode_s == "live"
-                    and live_budget_remaining > 0
-                    and live_client is not None
-                )
-                if live_seed_allowed:
-                    try:
-                        _seed_id = plan_and_post_seed_comment(
-                            paper, live_client, db, karma_remaining, now, test_mode=False
-                        )
-                    except KoalaWindowClosedError:
-                        log.warning(
-                            "[window] paper=%s 409_window_closed tool=post_seed_comment",
-                            paper.paper_id,
-                        )
-                        _seed_id = None
-                    if _seed_id is not None:
-                        seed_live_posted = True
-                        log.info("[competition] seed_live_posted paper_id=%s", paper.paper_id)
-                    else:
-                        log.info(
-                            "[competition] seed_skipped paper_id=%s reason=live_gate_failed",
-                            paper.paper_id,
-                        )
-                else:
+        if _opp != PaperOpportunity.SEED:
+            seed_live_reason = "no_candidate"
+        elif db.has_recent_seed_action_for_paper(paper.paper_id, now):
+            seed_live_reason = "recent_action"
+            log.info(
+                "[competition] seed_skipped paper_id=%s reason=recent_action",
+                paper.paper_id,
+            )
+        else:
+            env_run_mode_s = get_run_mode() if not test_mode else "test"
+            live_seed_allowed = (
+                live_reactive
+                and not test_mode
+                and env_run_mode_s == "live"
+                and live_budget_remaining > 0
+                and live_client is not None
+                and seed_window_ok
+            )
+            if not live_reactive:
+                seed_live_reason = "live_disabled"
+            elif test_mode:
+                seed_live_reason = "seed_gate_test_mode"
+            elif env_run_mode_s != "live":
+                seed_live_reason = "seed_gate_run_mode"
+            elif live_budget_remaining <= 0:
+                seed_live_reason = "seed_gate_budget"
+            elif live_client is None:
+                seed_live_reason = "seed_gate_no_client"
+            elif not seed_window_ok:
+                seed_live_reason = "seed_gate_window"
+
+            if live_seed_allowed:
+                try:
                     _seed_id = plan_and_post_seed_comment(
-                        paper, client, db, karma_remaining, now, test_mode=test_mode
+                        paper, live_client, db, karma_remaining, now, test_mode=False
                     )
-                    if _seed_id is not None:
-                        seed_draft_created = True
-                        log.info(
-                            "[competition] seed_draft_created paper_id=%s", paper.paper_id
-                        )
-                    else:
-                        log.info(
-                            "[competition] seed_skipped paper_id=%s reason=no_candidates",
-                            paper.paper_id,
-                        )
+                except KoalaWindowClosedError:
+                    log.warning(
+                        "[window] paper=%s 409_window_closed tool=post_seed_comment",
+                        paper.paper_id,
+                    )
+                    _seed_id = None
+                    seed_live_reason = "window_closed"
+                if _seed_id is not None:
+                    seed_live_posted = True
+                    seed_live_reason = "live_posted"
+                    log.info("[competition] seed_live_posted paper_id=%s", paper.paper_id)
+                elif seed_live_reason != "window_closed":
+                    seed_live_reason = "live_gate_failed"
+                    log.info(
+                        "[competition] seed_skipped paper_id=%s reason=live_gate_failed",
+                        paper.paper_id,
+                    )
+            else:
+                _seed_id = plan_and_post_seed_comment(
+                    paper, client, db, karma_remaining, now, test_mode=test_mode
+                )
+                if _seed_id is not None:
+                    seed_draft_created = True
+                    seed_live_reason = "draft_created"
+                    log.info(
+                        "[competition] seed_draft_created paper_id=%s", paper.paper_id
+                    )
+    else:
+        seed_live_reason = "no_candidate"
 
     # ---------------------------------------------------------------------------
     # Verdict path — dry-run by default; live only when all gates pass.
@@ -610,6 +635,7 @@ def _process_paper(
         "verdict_draft_created": verdict_status == "dry_run",
         "seed_draft_created": seed_draft_created,
         "seed_live_posted": seed_live_posted,
+        "seed_live_reason": seed_live_reason,
     }
 
 
@@ -746,7 +772,7 @@ def run_operational_loop(
         _has_own = db.has_prior_participation(_p.paper_id)
         if _citable_n < MIN_VERDICT_CITATIONS:
             log.info(
-                "[competition] verdict_blocked paper_id=%s reason=insufficient_citations count=%d required=%d",
+                "[competition] verdict_blocked paper_id=%s reason=insufficient_verdict_citations count=%d required=%d",
                 _p.paper_id, _citable_n, MIN_VERDICT_CITATIONS,
             )
         elif not _has_own:
@@ -943,6 +969,9 @@ def run_operational_loop(
                 "verdict_status": result.get("verdict_status"),
                 "verdict_live_submitted": result.get("verdict_live_submitted", False),
                 "verdict_live_reason": result.get("verdict_live_reason"),
+                "seed_draft_created": result.get("seed_draft_created", False),
+                "seed_live_posted": result.get("seed_live_posted", False),
+                "seed_live_reason": result.get("seed_live_reason"),
             }
         except Exception as exc:
             log.exception("[loop] ERROR processing paper=%s", paper_id)
