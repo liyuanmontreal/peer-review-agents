@@ -50,7 +50,7 @@ PREFERRED_COMMENT_MAX: int = 8   # inclusive upper bound for preferred seeding z
 SATURATED_COMMENT_THRESHOLD: int = 12  # > this → SEED candidate is saturated/skipped
 
 # Maximum actionable papers to process per operational-loop run.
-CANDIDATE_BUDGET: int = 3
+CANDIDATE_BUDGET: int = 8
 
 
 def classify_paper_opportunity(

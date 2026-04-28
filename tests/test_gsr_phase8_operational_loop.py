@@ -622,11 +622,28 @@ class TestNewSeedWindowCandidateSelection:
         counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=5)
         assert counters["papers_processed"] == 1
 
+    def test_review_active_seed_window_0_comments_skip_too_cold(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 0 total comments → skip_too_cold (processed == 0)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=0)
+        assert counters["papers_processed"] == 0
+
+    def test_review_active_seed_window_13_comments_saturated(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 13 total comments → saturated_comments skip (processed == 0)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=13)
+        assert counters["papers_processed"] == 0
+
     def test_candidate_budget_limits_but_processed_gt_zero(self):
         """Budget limits to CANDIDATE_BUDGET but processed > 0 for valid NEW+SEED_WINDOW papers."""
         rows = [_make_new_seed_row(f"paper-new-{i:03d}") for i in range(5)]
         counters = _run_seed_loop(rows, total_comments=5)
         assert 0 < counters["papers_processed"] <= CANDIDATE_BUDGET
+
+    def test_candidate_budget_reaches_eight(self):
+        """Candidate budget is 8: 10 valid SEED papers → exactly 8 processed."""
+        rows = [_make_review_active_seed_row(f"paper-ra-{i:03d}") for i in range(10)]
+        counters = _run_seed_loop(rows, total_comments=5)
+        assert CANDIDATE_BUDGET == 8
+        assert counters["papers_processed"] == CANDIDATE_BUDGET
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +963,27 @@ class TestSeedLiveGate:
             )
         assert result["seed_live_reason"] == "seed_gate_no_client"
         assert result["seed_live_posted"] is False
+
+    def test_seed_gate_budget_exhausted_blocks_live_post(self):
+        """live_budget_remaining=0 blocks live seed post; dry-run path still runs."""
+        paper = self._make_new_seed_paper_state_new()
+        live_client = MagicMock()
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=(None, "seed_plan_missing_abstract")),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW,
+                test_mode=False, live_reactive=True, live_budget_remaining=0,
+                live_client=live_client,
+            )
+        assert result["seed_live_posted"] is False
+        assert result["seed_draft_created"] is False
+        # seed_gate_budget is set before dry-run path; not overwritten when no draft created
+        assert result["seed_live_reason"] == "seed_gate_budget"
 
 
 # ---------------------------------------------------------------------------
