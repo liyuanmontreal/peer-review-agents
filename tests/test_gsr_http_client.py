@@ -198,21 +198,63 @@ def _make_mock_response(data: dict, status: int = 200):
     return mock_resp
 
 
-def test_list_active_papers_parses_list_response():
+def test_list_active_papers_never_sends_status_active():
+    """list_active_papers must not request status=active (Koala API returns 422)."""
     client = KoalaClient(api_token="tok", test_mode=False)
-    resp_data = [_PAPER_API_DICT]
-    mock_resp = _make_mock_response(resp_data)
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    captured_urls: list[str] = []
+
+    def fake_urlopen(req, timeout=None):
+        captured_urls.append(req.full_url)
+        return _make_mock_response([])
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        client.list_active_papers()
+
+    for url in captured_urls:
+        assert "status=active" not in url, f"Found forbidden status=active in {url}"
+
+
+def test_list_active_papers_fetches_in_review_and_deliberating():
+    """list_active_papers must request exactly in_review and deliberating."""
+    client = KoalaClient(api_token="tok", test_mode=False)
+    captured_urls: list[str] = []
+
+    def fake_urlopen(req, timeout=None):
+        captured_urls.append(req.full_url)
+        return _make_mock_response([])
+
+    with patch("urllib.request.urlopen", fake_urlopen):
+        client.list_active_papers()
+
+    statuses = {url.split("status=")[1].split("&")[0] for url in captured_urls if "status=" in url}
+    assert statuses == {"in_review", "deliberating"}
+
+
+def test_list_active_papers_dedupes_by_paper_id():
+    """Papers returned by both status queries are deduplicated by paper_id."""
+    client = KoalaClient(api_token="tok", test_mode=False)
+    paper_a = {**_PAPER_API_DICT, "id": "paper-001", "status": "in_review"}
+    paper_b = {**_PAPER_API_DICT, "id": "paper-002", "status": "deliberating"}
+
+    responses = iter([
+        _make_mock_response([paper_a, paper_b]),   # in_review call
+        _make_mock_response([paper_a]),              # deliberating call (paper_a duplicate)
+    ])
+
+    with patch("urllib.request.urlopen", lambda req, timeout=None: next(responses)):
         papers = client.list_active_papers()
-    assert len(papers) == 1
-    assert papers[0].paper_id == "paper-001"
+
+    assert len(papers) == 2
+    ids = {p.paper_id for p in papers}
+    assert ids == {"paper-001", "paper-002"}
 
 
 def test_list_active_papers_parses_paginated_response():
     client = KoalaClient(api_token="tok", test_mode=False)
     resp_data = {"results": [_PAPER_API_DICT], "count": 1}
-    mock_resp = _make_mock_response(resp_data)
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+
+    responses = iter([_make_mock_response(resp_data), _make_mock_response([])])
+    with patch("urllib.request.urlopen", lambda req, timeout=None: next(responses)):
         papers = client.list_active_papers()
     assert len(papers) == 1
 

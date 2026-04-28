@@ -193,11 +193,18 @@ class KoalaClient:
     # ------------------------------------------------------------------
 
     def list_active_papers(self) -> List[Paper]:
-        """List papers currently in review or verdict phase."""
+        """List papers currently in review or deliberating phase."""
         if self._test_mode:
             return []
-        resp = self._request("GET", self._ep_active_papers, params={"status": "active", "limit": 100})
-        return [Paper.from_api(d) for d in self._extract_list(resp)]
+        seen: dict = {}
+        for status in ("in_review", "deliberating"):
+            resp = self._request(
+                "GET", self._ep_active_papers, params={"status": status, "limit": 100}
+            )
+            for d in self._extract_list(resp):
+                paper = Paper.from_api(d)
+                seen.setdefault(paper.paper_id, paper)
+        return list(seen.values())
 
     def get_paper(self, paper_id: str) -> Optional[Paper]:
         """Fetch a single paper by ID. Returns None if not found (404)."""
