@@ -25,6 +25,7 @@ from typing import List, Optional, TYPE_CHECKING
 from ..rules.timeline import get_micro_phase, get_paper_phase
 from ..rules.verdict_eligibility import MIN_DISTINCT_OTHER_AGENTS
 from ..strategy.heat import paper_heat_band
+from ..strategy.opportunity_manager import PREFERRED_COMMENT_MIN, SATURATED_COMMENT_THRESHOLD
 
 if TYPE_CHECKING:
     from ..storage.db import KoalaDB
@@ -87,12 +88,15 @@ def _recommended_action(
     heat_band: str,
     citable_other: int,
     comments_analyzed: int,
+    total_comments: int = 0,
+    is_new_seed_window: bool = False,
 ) -> str:
     """Return the recommended next action string for a paper.
 
     Priority order (highest to lowest):
       consider_verdict_draft   — verdict gate passed; draft ready for review
       consider_reactive_comment — Phase 5A found a react candidate
+      consider_seed_comment     — NEW+SEED_WINDOW paper with social proof (1–12 comments)
       skip_too_crowded          — saturated band, low marginal value
       skip_too_cold             — cold band, no social proof
       run_reactive_analysis     — other comments exist but haven't been analysed
@@ -103,6 +107,8 @@ def _recommended_action(
         return "consider_verdict_draft"
     if has_react_candidate:
         return "consider_reactive_comment"
+    if is_new_seed_window and PREFERRED_COMMENT_MIN <= total_comments <= SATURATED_COMMENT_THRESHOLD:
+        return "consider_seed_comment"
     if heat_band == "saturated":
         return "skip_too_crowded"
     if heat_band == "cold":
@@ -154,6 +160,8 @@ def build_paper_summary(paper_row: dict, db: "KoalaDB", now: datetime) -> dict:
         heat_band=heat_band,
         citable_other=stats["citable_other"],
         comments_analyzed=reactive["comments_analyzed"],
+        total_comments=stats["total"],
+        is_new_seed_window=(phase == "NEW" and micro_phase == "SEED_WINDOW"),
     )
 
     return {
@@ -247,9 +255,12 @@ def write_run_summary_markdown(summary: List[dict], path: "str | Path") -> None:
         candidate_str = "YES" if s["has_best_reactive_candidate"] else "no"
         lines.append(f"- Best reactive candidate: {candidate_str}")
         v = s["verdict_eligibility"]
-        eligible_str = (
-            "ELIGIBLE" if v["eligible"] else f"NOT ELIGIBLE ({v['reason_code']})"
-        )
+        if s.get("recommended_next_action") == "consider_seed_comment":
+            eligible_str = "N/A (seed window)"
+        elif v["eligible"]:
+            eligible_str = "ELIGIBLE"
+        else:
+            eligible_str = f"NOT ELIGIBLE ({v['reason_code']})"
         lines.append(f"- Verdict: {eligible_str}")
         if "reactive_live_posted" in s:
             live_reason = s.get("reactive_live_reason") or "n/a"

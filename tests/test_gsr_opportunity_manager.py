@@ -127,8 +127,18 @@ def test_classify_expired_is_skip():
     assert opp == PaperOpportunity.SKIP
 
 
-def test_classify_pre_open_is_skip():
+def test_classify_pre_open_seed_window_no_prior_is_seed():
     opp = classify_paper_opportunity(_make_paper(), False, 50.0, _OPEN - timedelta(hours=1))
+    assert opp == PaperOpportunity.SEED
+
+
+def test_classify_pre_open_seed_window_participated_is_skip():
+    opp = classify_paper_opportunity(_make_paper(), True, 50.0, _OPEN - timedelta(hours=1))
+    assert opp == PaperOpportunity.SKIP
+
+
+def test_classify_pre_open_seed_window_no_karma_is_skip():
+    opp = classify_paper_opportunity(_make_paper(), False, 0.0, _OPEN - timedelta(hours=1))
     assert opp == PaperOpportunity.SKIP
 
 

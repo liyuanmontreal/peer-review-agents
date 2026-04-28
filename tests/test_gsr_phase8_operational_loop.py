@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +15,7 @@ from gsr_agent.orchestration.operational_loop import (
     run_operational_loop,
 )
 from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
+from gsr_agent.strategy.opportunity_manager import CANDIDATE_BUDGET
 
 _MOD = "gsr_agent.orchestration.operational_loop"
 _NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -548,3 +549,80 @@ class TestRunOperationalLoop:
         counters, _ = self._run_loop(paper_rows=rows, max_papers=2)
         assert counters["papers_seen"] == 10
         assert counters["papers_processed"] == 2
+
+
+# ---------------------------------------------------------------------------
+# TestNewSeedWindowCandidateSelection
+# ---------------------------------------------------------------------------
+
+def _make_new_seed_row(paper_id: str = "paper-new-001") -> dict:
+    """Paper where open_time is 2h in the future: Phase=NEW, Micro=SEED_WINDOW."""
+    return {
+        "paper_id": paper_id,
+        "title": "New Seed Paper",
+        "open_time": (_NOW + timedelta(hours=2)).isoformat(),
+        "review_end_time": (_NOW + timedelta(hours=50)).isoformat(),
+        "verdict_end_time": (_NOW + timedelta(hours=74)).isoformat(),
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "https://example.com/paper.pdf",
+        "local_pdf_path": None,
+    }
+
+
+def _make_review_active_seed_row(paper_id: str = "paper-ra-001") -> dict:
+    """Paper opened 6h ago: Phase=REVIEW_ACTIVE, Micro=SEED_WINDOW."""
+    return {
+        "paper_id": paper_id,
+        "title": "Review Active Seed Paper",
+        "open_time": (_NOW - timedelta(hours=6)).isoformat(),
+        "review_end_time": (_NOW + timedelta(hours=42)).isoformat(),
+        "verdict_end_time": (_NOW + timedelta(hours=66)).isoformat(),
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "https://example.com/paper.pdf",
+        "local_pdf_path": None,
+    }
+
+
+def _run_seed_loop(rows: list, total_comments: int) -> dict:
+    db = MagicMock()
+    db.get_papers.return_value = rows
+    db.get_comment_stats.return_value = {"total": total_comments, "ours": 0, "citable_other": 0}
+    db.has_prior_participation.return_value = False
+    db.has_recent_reactive_action_for_comment.return_value = False
+    db.has_recent_verdict_action_for_paper.return_value = False
+
+    with (
+        patch(f"{_MOD}._process_paper", return_value=_no_op_result()),
+        patch(f"{_MOD}.build_run_summary", return_value=[]),
+        patch(f"{_MOD}.write_run_summary_markdown"),
+        patch(f"{_MOD}.write_run_summary_jsonl"),
+    ):
+        return run_operational_loop(db, _NOW, output_dir="/tmp/test_new_seed")
+
+
+class TestNewSeedWindowCandidateSelection:
+    def test_new_seed_window_5_comments_selected(self):
+        """NEW+SEED_WINDOW + 5 total comments → selected seed candidate (processed > 0)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=5)
+        assert counters["papers_processed"] == 1
+
+    def test_new_seed_window_0_comments_skip_too_cold(self):
+        """NEW+SEED_WINDOW + 0 total comments → skip_too_cold (processed == 0)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=0)
+        assert counters["papers_processed"] == 0
+
+    def test_new_seed_window_13_comments_saturated(self):
+        """NEW+SEED_WINDOW + 13 total comments → saturated_comments skip (processed == 0)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=13)
+        assert counters["papers_processed"] == 0
+
+    def test_review_active_seed_window_selected(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 5 total comments → selected (REVIEW_ACTIVE behavior intact)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=5)
+        assert counters["papers_processed"] == 1
+
+    def test_candidate_budget_limits_but_processed_gt_zero(self):
+        """Budget limits to CANDIDATE_BUDGET but processed > 0 for valid NEW+SEED_WINDOW papers."""
+        rows = [_make_new_seed_row(f"paper-new-{i:03d}") for i in range(5)]
+        counters = _run_seed_loop(rows, total_comments=5)
+        assert 0 < counters["papers_processed"] <= CANDIDATE_BUDGET

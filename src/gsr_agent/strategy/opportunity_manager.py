@@ -71,10 +71,21 @@ def classify_paper_opportunity(
         PaperOpportunity enum value
     """
     phase = get_paper_phase(now, paper.open_time)
-    if phase in (PaperPhase.NEW, PaperPhase.EXPIRED):
+    if phase == PaperPhase.EXPIRED:
         return PaperOpportunity.SKIP
 
     micro = get_micro_phase(now, paper.open_time)
+
+    if phase == PaperPhase.NEW:
+        if micro != MicroPhase.SEED_WINDOW:
+            return PaperOpportunity.SKIP
+        if has_participated:
+            return PaperOpportunity.SKIP
+        if should_block_new_paper_entry(karma_remaining, DEFAULT_RESERVE_FLOOR):
+            return PaperOpportunity.SKIP
+        if not can_afford(karma_remaining, get_action_cost("comment", has_prior_participation=False)):
+            return PaperOpportunity.SKIP
+        return PaperOpportunity.SEED
 
     if micro == MicroPhase.SEED_WINDOW:
         if has_participated:

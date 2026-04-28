@@ -742,12 +742,12 @@ def run_operational_loop(
         else:
             log.info("[competition] auto_verdict_skipped reason=no_verdict_ready_candidates")
 
-    # Sort by opportunity priority; SEED papers further sorted by crowding.
+    # Sort by opportunity priority; SEED papers further sorted by total comment crowding.
     def _sort_key(item):
         _, _p, _o, _s = item
         _base = OPPORTUNITY_PRIORITY[_o]
         if _o == PaperOpportunity.SEED:
-            _n = _s.get("citable_other", 0)
+            _n = _s.get("total", 0)
             if _n > SATURATED_COMMENT_THRESHOLD:
                 return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0)
             if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
@@ -764,17 +764,17 @@ def run_operational_loop(
     for _r, _p, _o, _s in _sorted:
         if _o == PaperOpportunity.SKIP:
             continue
-        _n = _s.get("citable_other", 0)
+        _n = _s.get("total", 0)
         if _o == PaperOpportunity.SEED:
             if _n > SATURATED_COMMENT_THRESHOLD:
                 log.info(
-                    "[competition] SKIP paper_id=%s reason=saturated_comments comment_count=%d",
+                    "[competition] saturated_comments paper_id=%s comment_count=%d",
                     _p.paper_id, _n,
                 )
                 continue
             if _n == 0:
                 log.info(
-                    "[competition] SKIP paper_id=%s reason=skip_too_cold comment_count=%d",
+                    "[competition] skip_too_cold paper_id=%s comment_count=%d",
                     _p.paper_id, _n,
                 )
                 continue
