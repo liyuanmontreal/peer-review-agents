@@ -887,7 +887,7 @@ def run_operational_loop(
             if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
                 return (_base, _r, 0)  # preferred zone; fresh before recent_action
             if _n == 0:
-                return (_base, _r, 1)  # cold
+                return (_base, _r, 3)  # cold-start fallback, ranked after 9–12
             return (_base, _r, 2)  # 9–12: acceptable but below preferred
         return (_base, 0, 0)
 
@@ -896,6 +896,8 @@ def run_operational_loop(
 
     # Filter SEED papers by crowding thresholds and apply candidate budget.
     _candidates: list = []
+    _cold_start_admitted = False
+    _has_nonzero_seed_candidate = False
     for _r, _p, _o, _s, _ in _sorted:
         if _o == PaperOpportunity.SKIP:
             continue
@@ -908,17 +910,32 @@ def run_operational_loop(
                 )
                 continue
             if _n == 0:
+                _abstract = (_p.abstract or "").strip()
+                if (
+                    _cold_start_admitted
+                    or _has_nonzero_seed_candidate
+                    or not _abstract
+                    or len(_abstract) < 40
+                    or len(_abstract.split()) < 6
+                ):
+                    log.info(
+                        "[competition] skip_too_cold paper_id=%s comment_count=%d",
+                        _p.paper_id, _n,
+                    )
+                    continue
+                _cold_start_admitted = True
+                log.info("[competition] cold_start_seed_fallback paper_id=%s", _p.paper_id)
                 log.info(
-                    "[competition] skip_too_cold paper_id=%s comment_count=%d",
-                    _p.paper_id, _n,
+                    "[competition] selected_cold_start_seed_candidate paper_id=%s", _p.paper_id,
                 )
-                continue
-            if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
-                log.info(
-                    "[competition] seed_candidate_preferred_band paper_id=%s comment_count=%d",
-                    _p.paper_id, _n,
-                )
-            log.info("[competition] selected_seed_candidate paper_id=%s", _p.paper_id)
+            else:
+                _has_nonzero_seed_candidate = True
+                if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
+                    log.info(
+                        "[competition] seed_candidate_preferred_band paper_id=%s comment_count=%d",
+                        _p.paper_id, _n,
+                    )
+                log.info("[competition] selected_seed_candidate paper_id=%s", _p.paper_id)
         _candidates.append(_r)
 
     _inspected = min(len(_candidates), CANDIDATE_BUDGET)

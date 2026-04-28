@@ -49,10 +49,11 @@ def _deliberating_row(paper_id: str = "delib-001") -> dict:
 def _make_db(rows: list, *, citable_other: int = 0, has_participated: bool = False) -> MagicMock:
     db = MagicMock()
     db.get_papers.return_value = rows
-    db.get_comment_stats.return_value = {"citable_other": citable_other}
+    db.get_comment_stats.return_value = {"total": citable_other, "ours": 0, "citable_other": citable_other}
     db.has_prior_participation.return_value = has_participated
     db.has_recent_reactive_action_for_comment.return_value = False
     db.has_recent_verdict_action_for_paper.return_value = False
+    db.has_recent_seed_action_for_paper.return_value = False
     return db
 
 
@@ -137,7 +138,7 @@ def test_deliberating_2_citable_verdict_blocked_insufficient(caplog):
     with caplog.at_level("INFO", logger=_MOD):
         _run(db)
     assert "verdict_blocked" in caplog.text
-    assert "insufficient_citations" in caplog.text
+    assert "insufficient_verdict_citations" in caplog.text
 
 
 def test_verdict_opportunity_report_written(tmp_path):
@@ -173,3 +174,74 @@ def test_live_verdict_requires_paper_id_allowlist(tmp_path):
         )
     assert not ok
     assert any("paper-id" in f for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# Part C: Cold-start seed fallback (0-comment papers)
+# ---------------------------------------------------------------------------
+
+_GOOD_ABSTRACT = "This paper proposes a novel approach to machine learning with strong empirical results."
+
+
+def _cold_row(paper_id: str = "cold-001") -> dict:
+    return {**_seed_row(paper_id), "abstract": _GOOD_ABSTRACT}
+
+
+def test_cold_start_fallback_admits_one_with_good_abstract(caplog):
+    """0-comment paper with sufficient abstract → selected_cold_start_seed_candidate logged."""
+    db = _make_db([_cold_row()], citable_other=0)
+    with caplog.at_level("INFO", logger=_MOD):
+        _run(db)
+    assert "cold_start_seed_fallback" in caplog.text
+    assert "selected_cold_start_seed_candidate" in caplog.text
+    assert "skip_too_cold" not in caplog.text
+
+
+def test_cold_start_fallback_blocked_when_nonzero_seed_exists(caplog):
+    """When a 1–12 comment paper exists, 0-comment paper is blocked (skip_too_cold)."""
+    row_warm = {**_seed_row("warm-001"), "abstract": _GOOD_ABSTRACT}
+    row_cold = {**_seed_row("cold-001"), "abstract": _GOOD_ABSTRACT}
+    db = MagicMock()
+    db.get_papers.return_value = [row_warm, row_cold]
+    db.has_prior_participation.return_value = False
+    db.has_recent_reactive_action_for_comment.return_value = False
+    db.has_recent_verdict_action_for_paper.return_value = False
+    db.has_recent_seed_action_for_paper.return_value = False
+
+    def _stats(pid):
+        n = 5 if pid == "warm-001" else 0
+        return {"total": n, "ours": 0, "citable_other": n}
+
+    db.get_comment_stats.side_effect = _stats
+    with caplog.at_level("INFO", logger=_MOD):
+        _run(db)
+    assert "selected_seed_candidate" in caplog.text
+    assert "skip_too_cold" in caplog.text
+    assert "selected_cold_start_seed_candidate" not in caplog.text
+
+
+def test_cold_start_fallback_admits_at_most_one(caplog):
+    """With multiple 0-comment papers, only one enters; the rest are skip_too_cold."""
+    rows = [_cold_row(f"cold-{i:03d}") for i in range(3)]
+    db = _make_db(rows, citable_other=0)
+    with caplog.at_level("INFO", logger=_MOD):
+        _run(db)
+    assert caplog.text.count("selected_cold_start_seed_candidate") == 1
+    assert caplog.text.count("skip_too_cold") == 2
+
+
+def test_cold_start_fallback_dedup_preserved(caplog):
+    """Cold-start candidate still enters candidate list; recent_action dedup fires inside _process_paper."""
+    db = _make_db([_cold_row()], citable_other=0)
+    db.has_recent_seed_action_for_paper.return_value = True
+    with caplog.at_level("INFO", logger=_MOD):
+        _run(db)
+    # Selection log emitted before _process_paper — cold candidate was considered
+    assert "selected_cold_start_seed_candidate" in caplog.text
+
+
+def test_cold_start_fallback_live_budget_unchanged():
+    """Cold-start fallback does not alter the live post budget counter."""
+    db = _make_db([_cold_row()], citable_other=0)
+    result = _run(db)
+    assert result["live_reactive_posts"] == 0
