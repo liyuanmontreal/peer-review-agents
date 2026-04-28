@@ -11,27 +11,46 @@ from typing import List, Optional
 from ..adapters.gsr_runner import PaperIndex, get_seed_evidence_candidates
 from ..rules.moderation import check_moderation
 
+_MIN_ABSTRACT_CHARS = 40
+_MIN_ABSTRACT_WORDS = 6
+
+# Each template asks a narrow, method-specific question tied to the paper's
+# title. No abstract text is quoted to avoid the moderation low_effort category.
 _TEMPLATES = [
     (
-        "The abstract states: \"{claim_excerpt}\"\n\n"
-        "Could the authors clarify what empirical evidence most directly supports "
-        "this claim? I'd like to understand the evaluation methodology before "
-        "drawing conclusions."
+        "The {title} method appears to rely on conditions that hold in the "
+        "standard evaluation benchmarks. "
+        "One question worth exploring: how does it behave under distribution shift "
+        "or in regimes that differ from the training setup? "
+        "Specifically, is there a failure mode where performance degrades sharply "
+        "rather than gradually?"
     ),
     (
-        "Based on the abstract, the paper addresses {title}. "
-        "The abstract mentions: \"{claim_excerpt}\"\n\n"
-        "What are the main limitations or scope boundaries that future work "
-        "should be aware of?"
+        "For {title}, it would be useful to know whether the reported gains "
+        "are driven by a single design choice or require all components working together. "
+        "Was a per-component ablation run, and if so, which component "
+        "contributes the largest share of the improvement?"
     ),
     (
-        "Reading the abstract, I note the focus on {title}. "
-        "I look forward to reviewing the methodology section to assess "
-        "how the authors handle: \"{claim_excerpt}\""
+        "{title} reports strong results on the stated benchmarks. "
+        "How stable are these results across different hyperparameter settings "
+        "and data scales? "
+        "Do the gains persist as compute budget or dataset size changes, "
+        "or are they concentrated in a specific operating regime?"
     ),
 ]
 
-_MAX_CLAIM_EXCERPT = 150
+
+def _is_low_signal_abstract(abstract: str) -> bool:
+    stripped = abstract.strip()
+    if not stripped:
+        return False  # empty abstract handled separately via get_seed_evidence_candidates
+    return len(stripped) < _MIN_ABSTRACT_CHARS or len(stripped.split()) < _MIN_ABSTRACT_WORDS
+
+
+def is_low_signal_abstract(index: PaperIndex) -> bool:
+    """Return True if the abstract is too short or vague to generate a substantive comment."""
+    return _is_low_signal_abstract(index.abstract or "")
 
 
 def generate_seed_comment_candidates(index: PaperIndex) -> List[str]:
@@ -44,17 +63,9 @@ def generate_seed_comment_candidates(index: PaperIndex) -> List[str]:
     if not candidates:
         return []
 
-    claim = candidates[0].claim
-    excerpt = claim[:_MAX_CLAIM_EXCERPT].rstrip()
-    if len(claim) > _MAX_CLAIM_EXCERPT:
-        excerpt += "..."
-
     results = []
     for template in _TEMPLATES:
-        text = template.format(
-            claim_excerpt=excerpt,
-            title=index.title or "this topic",
-        )
+        text = template.format(title=index.title or "this work")
         passes, _ = check_moderation(text)
         if passes and text.strip():
             results.append(text)

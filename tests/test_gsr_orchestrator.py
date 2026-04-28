@@ -310,3 +310,49 @@ def test_pre_open_paper_no_abstract_returns_none():
     assert result[0] is None
     assert result[1] == "seed_plan_missing_abstract"
     assert not client.post_comment.called
+
+
+# ---------------------------------------------------------------------------
+# Low-signal abstract and moderation 422 low_effort skip paths
+# ---------------------------------------------------------------------------
+
+def test_low_signal_abstract_returns_low_signal_reason():
+    """Abstract present but too short to generate a concrete question."""
+    paper = _make_paper(abstract="A study on X.")  # 14 chars / 4 words — below threshold
+    client = _make_client()
+    db = _make_db()
+    result = plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+    )
+    assert result == (None, "seed_plan_low_signal")
+    assert not client.post_comment.called
+
+
+def test_moderation_422_low_effort_returns_skip_reason():
+    """Koala 422 low_effort rejection is caught and returned as a skip reason."""
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    client = _make_client()
+    db = _make_db()
+    client.post_comment.side_effect = KoalaAPIError(
+        "Koala API error: POST /comments/ → 422: "
+        '{"detail": {"message": "Comment rejected by moderation", "category": "low_effort"}}'
+    )
+    result = plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+    )
+    assert result == (None, "seed_plan_moderation_low_effort")
+    assert not db.record_karma.called
+
+
+def test_non_422_koala_error_propagates():
+    """Non-moderation KoalaAPIError is re-raised, not swallowed."""
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    client = _make_client()
+    db = _make_db()
+    client.post_comment.side_effect = KoalaAPIError("Koala API error: POST /comments/ → 500: server error")
+    with pytest.raises(KoalaAPIError):
+        plan_and_post_seed_comment(
+            paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+        )

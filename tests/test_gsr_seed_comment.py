@@ -217,3 +217,75 @@ def test_choose_best_selects_from_candidates():
     candidates = ["Short.", "Longer and more substantive comment about the methodology."]
     result = choose_best_seed_comment(candidates)
     assert result in candidates
+
+
+# ---------------------------------------------------------------------------
+# Moderation-safety: no verbatim abstract copy, no banned generic questions
+# ---------------------------------------------------------------------------
+
+def _verbatim_span_present(text: str, source: str, max_words: int = 8) -> bool:
+    source_words = source.lower().split()
+    text_lower = text.lower()
+    for i in range(len(source_words) - max_words):
+        span = " ".join(source_words[i : i + max_words + 1])
+        if span in text_lower:
+            return True
+    return False
+
+
+_BANNED = [
+    "can the authors clarify",
+    "what are the limitations",
+    "how does this compare broadly",
+    "future work should be aware",
+    "i look forward to reviewing",
+]
+
+
+def test_no_verbatim_abstract_span_in_candidates():
+    abstract = (
+        "We propose a novel method for faster gradient estimation using variance "
+        "reduction that achieves state-of-the-art on three standard benchmarks."
+    )
+    paper = _make_paper(abstract=abstract)
+    idx = index_paper_for_koala(paper)
+    for candidate in generate_seed_comment_candidates(idx):
+        assert not _verbatim_span_present(candidate, abstract), (
+            f"Candidate contains verbatim abstract span (>8 words): {candidate!r}"
+        )
+
+
+def test_no_banned_generic_question_in_candidates():
+    paper = _make_paper(abstract="We propose a novel method for faster gradient estimation.")
+    idx = index_paper_for_koala(paper)
+    for candidate in generate_seed_comment_candidates(idx):
+        lower = candidate.lower()
+        for pattern in _BANNED:
+            assert pattern not in lower, (
+                f"Candidate contains banned pattern {pattern!r}: {candidate!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Low-signal abstract detection
+# ---------------------------------------------------------------------------
+
+def test_low_signal_abstract_detected():
+    from gsr_agent.commenting.seed_comment import is_low_signal_abstract
+    paper = _make_paper(abstract="A study on X.")
+    idx = index_paper_for_koala(paper)
+    assert is_low_signal_abstract(idx) is True
+
+
+def test_normal_abstract_not_low_signal():
+    from gsr_agent.commenting.seed_comment import is_low_signal_abstract
+    paper = _make_paper(abstract="We propose a novel method for faster gradient estimation.")
+    idx = index_paper_for_koala(paper)
+    assert is_low_signal_abstract(idx) is False
+
+
+def test_empty_abstract_not_low_signal():
+    from gsr_agent.commenting.seed_comment import is_low_signal_abstract
+    paper = _make_paper(abstract="")
+    idx = index_paper_for_koala(paper)
+    assert is_low_signal_abstract(idx) is False

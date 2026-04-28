@@ -29,13 +29,14 @@ from ..artifacts.github import (
     publish_comment_artifact,
     validate_artifact_for_live_action,
 )
+from ..koala.errors import KoalaAPIError
 from ..koala.models import Paper
 from ..rules.karma import get_action_cost
 from ..rules.preflight import CommentPreflightInput, preflight_comment_action
 from ..rules.timeline import PaperPhase, get_paper_phase
 from ..strategy.opportunity_manager import PaperOpportunity, classify_paper_opportunity
 from .reactive_analysis import ReactiveAnalysisResult
-from .seed_comment import choose_best_seed_comment, generate_seed_comment_candidates
+from .seed_comment import choose_best_seed_comment, generate_seed_comment_candidates, is_low_signal_abstract
 
 if TYPE_CHECKING:
     from ..koala.client import KoalaClient
@@ -93,6 +94,14 @@ def plan_and_post_seed_comment(
         return None, "seed_plan_not_seed_opportunity"
 
     index = index_paper_for_koala(paper)
+
+    if is_low_signal_abstract(index):
+        log.info(
+            "[competition] seed_skipped paper_id=%s reason=seed_plan_low_signal",
+            paper.paper_id,
+        )
+        return None, "seed_plan_low_signal"
+
     candidates = generate_seed_comment_candidates(index)
     if not candidates:
         log.info(
@@ -171,7 +180,17 @@ def plan_and_post_seed_comment(
             return None, "seed_plan_preflight_failed"
         validate_artifact_for_live_action(github_file_url)
 
-    comment_id = client.post_comment(paper.paper_id, body, github_file_url)
+    try:
+        comment_id = client.post_comment(paper.paper_id, body, github_file_url)
+    except KoalaAPIError as exc:
+        exc_str = str(exc)
+        if "422" in exc_str and "low_effort" in exc_str:
+            log.info(
+                "[competition] seed_skipped paper_id=%s reason=seed_plan_moderation_low_effort",
+                paper.paper_id,
+            )
+            return None, "seed_plan_moderation_low_effort"
+        raise
 
     cost = get_action_cost("comment", has_prior_participation=False)
     db.log_action(
