@@ -167,6 +167,92 @@ def test_post_comment_receives_valid_github_url():
     assert github_url.startswith("https://github.com/")
     assert not github_url.startswith("TODO:")
 
+
+# ---------------------------------------------------------------------------
+# Live preflight — API token acceptance (test_mode=False)
+# ---------------------------------------------------------------------------
+
+_FAKE_ARTIFACT_URL = (
+    "https://github.com/owner/repo/blob/main/logs/paper-001/comment_draft_paper-001_ts.md"
+)
+
+
+def _patch_live_artifacts(monkeypatch):
+    monkeypatch.setattr(
+        "gsr_agent.commenting.orchestrator.publish_comment_artifact",
+        lambda paper_id, body, test_mode=False: _FAKE_ARTIFACT_URL,
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.orchestrator.validate_artifact_for_live_action",
+        lambda url: None,
+    )
+
+
+def test_live_preflight_accepts_koala_api_token(monkeypatch):
+    monkeypatch.setenv("KOALA_API_TOKEN", "tok-live-test")
+    monkeypatch.delenv("KOALA_API_KEY", raising=False)
+    monkeypatch.setenv("KOALA_RUN_MODE", "live")
+    _patch_live_artifacts(monkeypatch)
+    result = plan_and_post_seed_comment(
+        _make_paper(), _make_client(), _make_db(), karma_remaining=50.0,
+        now=_NOW_SEED, test_mode=False,
+    )
+    assert result[0] is not None
+    assert result[1] is None
+
+
+def test_live_preflight_accepts_koala_api_key_only(monkeypatch):
+    monkeypatch.delenv("KOALA_API_TOKEN", raising=False)
+    monkeypatch.setenv("KOALA_API_KEY", "key-live-test")
+    monkeypatch.setenv("KOALA_RUN_MODE", "live")
+    _patch_live_artifacts(monkeypatch)
+    result = plan_and_post_seed_comment(
+        _make_paper(), _make_client(), _make_db(), karma_remaining=50.0,
+        now=_NOW_SEED, test_mode=False,
+    )
+    assert result[0] is not None
+    assert result[1] is None
+
+
+def test_live_preflight_missing_both_returns_skip_reason(monkeypatch):
+    monkeypatch.delenv("KOALA_API_TOKEN", raising=False)
+    monkeypatch.delenv("KOALA_API_KEY", raising=False)
+    monkeypatch.setenv("KOALA_RUN_MODE", "live")
+    _patch_live_artifacts(monkeypatch)
+    result = plan_and_post_seed_comment(
+        _make_paper(), _make_client(), _make_db(), karma_remaining=50.0,
+        now=_NOW_SEED, test_mode=False,
+    )
+    assert result == (None, "seed_plan_preflight_failed")
+
+
+def test_live_preflight_no_token_does_not_post(monkeypatch):
+    monkeypatch.delenv("KOALA_API_TOKEN", raising=False)
+    monkeypatch.delenv("KOALA_API_KEY", raising=False)
+    monkeypatch.setenv("KOALA_RUN_MODE", "live")
+    _patch_live_artifacts(monkeypatch)
+    client = _make_client()
+    plan_and_post_seed_comment(
+        _make_paper(), client, _make_db(), karma_remaining=50.0,
+        now=_NOW_SEED, test_mode=False,
+    )
+    assert not client.post_comment.called
+
+
+def test_live_preflight_does_not_log_token_values(monkeypatch, caplog):
+    import logging
+    monkeypatch.setenv("KOALA_API_TOKEN", "super-secret-token-xyz")
+    monkeypatch.delenv("KOALA_API_KEY", raising=False)
+    monkeypatch.setenv("KOALA_RUN_MODE", "live")
+    _patch_live_artifacts(monkeypatch)
+    with caplog.at_level(logging.DEBUG, logger="gsr_agent"):
+        plan_and_post_seed_comment(
+            _make_paper(), _make_client(), _make_db(), karma_remaining=50.0,
+            now=_NOW_SEED, test_mode=False,
+        )
+    for record in caplog.records:
+        assert "super-secret-token-xyz" not in record.message
+
 # ---------------------------------------------------------------------------
 # Phase:NEW preflight fix — pre-open papers in SEED_WINDOW must not raise
 # ---------------------------------------------------------------------------

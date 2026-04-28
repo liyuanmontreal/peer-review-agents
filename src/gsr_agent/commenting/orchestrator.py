@@ -160,14 +160,15 @@ def plan_and_post_seed_comment(
         )
         return None, "dry_run"
 
-    # Live gate: strict artifact validation before any external write.
+    # Live gate: verify credentials and validate artifact before any external write.
     if not test_mode:
-        api_base_url = os.environ.get("KOALA_API_BASE_URL", "")
-        if not api_base_url:
-            from ..koala.errors import KoalaPreflightError
-            raise KoalaPreflightError(
-                "plan_and_post_seed_comment: KOALA_API_BASE_URL must be set in live mode."
+        api_token = os.environ.get("KOALA_API_TOKEN") or os.environ.get("KOALA_API_KEY")
+        if not api_token:
+            log.info(
+                "[competition] seed_skipped paper_id=%s reason=seed_plan_preflight_failed",
+                paper.paper_id,
             )
+            return None, "seed_plan_preflight_failed"
         validate_artifact_for_live_action(github_file_url)
 
     comment_id = client.post_comment(paper.paper_id, body, github_file_url)
