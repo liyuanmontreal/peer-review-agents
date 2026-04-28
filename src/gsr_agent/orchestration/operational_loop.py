@@ -16,18 +16,26 @@ Phase 10: controlled live verdict submission. --live-verdict + KOALA_RUN_MODE=li
 loop run. More conservative than reactive live: requires explicit paper allowlist.
 Verdict live is independent of reactive live.
 
+Phase 10.5: automatic live verdict (gsr_agent only). --live-verdict-auto bypasses
+the explicit paper_ids allowlist. Instead, the loop scans for VERDICT_READY papers
+(deliberating phase + prior own comment + ≥3 distinct citeable other-agent comments)
+and selects the best candidate automatically. At most ONE verdict is submitted per
+loop run. Safety gates from Phase 10 remain active.
+
 Default is always dry-run. submit_verdict is never called without all gates passing.
 
 Public API
 ----------
 run_operational_loop(db, now, *, paper_ids=None, max_papers=None,
                      karma_remaining=100.0, output_dir="./workspace/reports",
-                     test_mode=True, live_reactive=False, live_verdict=False) -> dict
+                     test_mode=True, live_reactive=False, live_verdict=False,
+                     live_verdict_auto=False) -> dict
 
 CLI
 ---
     python -m gsr_agent.orchestration.operational_loop [--db PATH] [--out DIR]
         [--max-papers N] [--paper-id ID ...] [--live-reactive] [--live-verdict]
+        [--live-verdict-auto]
 """
 
 from __future__ import annotations
@@ -90,13 +98,15 @@ def run_preflight_checks(
     *,
     live_reactive: bool = False,
     live_verdict: bool = False,
+    live_verdict_auto: bool = False,
     paper_ids: Optional[List[str]] = None,
 ) -> tuple[bool, List[str]]:
     """Validate environment before starting the loop.
 
     Checks DB parent directory, output directory, and — when any live flag is
     set — KOALA_RUN_MODE, KOALA_API_TOKEN, and GitHub publish configuration.
-    For live_verdict, also requires explicit paper_ids.
+    For live_verdict, also requires explicit paper_ids. live_verdict_auto does
+    not require paper_ids (candidate selection is automatic).
 
     Returns:
         (ok, failures) — ok is True when no failures; failures is a list of
@@ -115,7 +125,7 @@ def run_preflight_checks(
         except OSError as exc:
             failures.append(f"Cannot create output directory {out_dir}: {exc}")
 
-    if live_reactive or live_verdict:
+    if live_reactive or live_verdict or live_verdict_auto:
         run_mode = get_run_mode()
         if run_mode != "live":
             failures.append(
@@ -576,22 +586,27 @@ def run_operational_loop(
     test_mode: bool = True,
     live_reactive: bool = False,
     live_verdict: bool = False,
+    live_verdict_auto: bool = False,
 ) -> dict:
     """Top-level orchestrator for tracked papers.
 
     Args:
-        db:              local SQLite state store
-        now:             current UTC datetime
-        paper_ids:       restrict to these paper IDs; None means all tracked papers
-        max_papers:      cap the number of papers processed
-        karma_remaining: karma budget for comment actions
-        output_dir:      directory to write run-summary reports
-        test_mode:       if True (default), use stub client; always dry-run
-        live_reactive:   if True, allow at most one live reactive post per run
-                         (requires KOALA_RUN_MODE=live and test_mode=False)
-        live_verdict:    if True, allow at most one live verdict submission per run
-                         (requires KOALA_RUN_MODE=live, test_mode=False, and explicit
-                         paper_ids as allowlist; more conservative than live_reactive)
+        db:                local SQLite state store
+        now:               current UTC datetime
+        paper_ids:         restrict to these paper IDs; None means all tracked papers
+        max_papers:        cap the number of papers processed
+        karma_remaining:   karma budget for comment actions
+        output_dir:        directory to write run-summary reports
+        test_mode:         if True (default), use stub client; always dry-run
+        live_reactive:     if True, allow at most one live reactive post per run
+                           (requires KOALA_RUN_MODE=live and test_mode=False)
+        live_verdict:      if True, allow at most one live verdict submission per run
+                           (requires KOALA_RUN_MODE=live, test_mode=False, and explicit
+                           paper_ids as allowlist; more conservative than live_reactive)
+        live_verdict_auto: if True, automatically select and submit at most one verdict
+                           per run without requiring explicit paper_ids. Candidate must
+                           be in deliberating phase with prior own comment and ≥3 distinct
+                           citeable other-agent comments. (gsr_agent only)
 
     Returns:
         Aggregate counter dict. ``errors`` is a list[dict]; ``errors_count`` is its
@@ -604,7 +619,7 @@ def run_operational_loop(
     client = _DryRunClient()
 
     live_client: Optional[Any] = None
-    if (live_reactive or live_verdict) and not test_mode:
+    if (live_reactive or live_verdict or live_verdict_auto) and not test_mode:
         from ..koala.client import KoalaClient
         live_client = KoalaClient()
         from ..koala.sync import sync_all_active_state
@@ -713,6 +728,20 @@ def run_operational_loop(
         log.info("[competition] no_viable_verdict_candidates")
     _write_verdict_opportunities_report(_verdict_opportunities, out_dir)
 
+    # Phase 10.5: auto-verdict candidate selection (gsr_agent only).
+    # Candidates already satisfy: deliberating phase + own comment + ≥MIN_VERDICT_CITATIONS.
+    _auto_verdict_paper_id: Optional[str] = None
+    if live_verdict_auto:
+        if _verdict_opportunities:
+            _best_auto = _verdict_opportunities[0]
+            _auto_verdict_paper_id = _best_auto["paper_id"]
+            log.info(
+                "[competition] selected_auto_verdict paper_id=%s citeable_comments=%d",
+                _auto_verdict_paper_id, _best_auto["citeable_count"],
+            )
+        else:
+            log.info("[competition] auto_verdict_skipped reason=no_verdict_ready_candidates")
+
     # Sort by opportunity priority; SEED papers further sorted by crowding.
     def _sort_key(item):
         _, _p, _o, _s = item
@@ -761,20 +790,33 @@ def run_operational_loop(
     log.info("[competition] candidate_budget inspected=%d max=%d", _inspected, CANDIDATE_BUDGET)
     papers = _candidates[:CANDIDATE_BUDGET]
 
+    # Ensure auto-verdict candidate is in the processing list even if outside CANDIDATE_BUDGET.
+    if _auto_verdict_paper_id is not None:
+        if not any(r["paper_id"] == _auto_verdict_paper_id for r in papers):
+            _auto_row = next(
+                (_r for _r, _p, _o, _s in _classified if _p.paper_id == _auto_verdict_paper_id),
+                None,
+            )
+            if _auto_row is not None:
+                papers = [_auto_row, *papers]
+
     for row in papers:
         paper_id = row["paper_id"]
         try:
             paper = _paper_from_row(row)
             live_budget_remaining = 0 if live_budget_used else 1
             verdict_live_budget_remaining = 0 if verdict_live_budget_used else 1
+            _is_auto_candidate = live_verdict_auto and paper_id == _auto_verdict_paper_id
+            _paper_live_verdict = live_verdict or _is_auto_candidate
+            _paper_allowlisted = allowlisted or _is_auto_candidate
             result = _process_paper(
                 paper, client, db, karma_remaining, now, test_mode,
                 live_reactive=live_reactive,
                 live_budget_remaining=live_budget_remaining,
                 live_client=live_client,
-                live_verdict=live_verdict,
+                live_verdict=_paper_live_verdict,
                 verdict_live_budget_remaining=verdict_live_budget_remaining,
-                allowlisted=allowlisted,
+                allowlisted=_paper_allowlisted,
             )
             counters["papers_processed"] += 1
             if result["has_reactive_candidate"]:
@@ -808,6 +850,15 @@ def run_operational_loop(
                 counters["verdict_live_missing_score"] += 1
             elif vlive_reason == "invalid_verdict_score":
                 counters["verdict_live_invalid_score"] += 1
+
+            if _is_auto_candidate:
+                if result.get("verdict_live_submitted"):
+                    log.info("[competition] auto_verdict_submitted paper_id=%s", paper_id)
+                else:
+                    _auto_skip_reason = vlive_reason or "unknown"
+                    log.info(
+                        "[competition] auto_verdict_skipped reason=%s", _auto_skip_reason
+                    )
 
             if result.get("window_skipped"):
                 counters["window_skipped"] += 1
@@ -899,12 +950,24 @@ def main() -> None:
             "Requires KOALA_RUN_MODE=live, test_mode=False, and --paper-id (allowlist)."
         ),
     )
+    parser.add_argument(
+        "--live-verdict-auto",
+        action="store_true",
+        default=False,
+        help=(
+            "Automatically select and submit at most one live verdict per run "
+            "without requiring --paper-id. Candidate must be in deliberating phase "
+            "with prior own comment and ≥3 distinct citeable other-agent comments. "
+            "Requires KOALA_RUN_MODE=live and test_mode=False. gsr_agent only."
+        ),
+    )
     args = parser.parse_args()
 
     ok, failures = run_preflight_checks(
         args.db, args.out,
         live_reactive=args.live_reactive,
         live_verdict=args.live_verdict,
+        live_verdict_auto=args.live_verdict_auto,
         paper_ids=args.paper_ids,
     )
     if not ok:
@@ -912,12 +975,13 @@ def main() -> None:
             print(f"[preflight] FAIL: {msg}")
         return
 
-    mode = "live" if (args.live_reactive or args.live_verdict) else "dry_run"
+    mode = "live" if (args.live_reactive or args.live_verdict or args.live_verdict_auto) else "dry_run"
     papers_label = "all" if args.paper_ids is None else str(len(args.paper_ids))
     print(
         f"[loop] START mode={mode}"
         f" reactive={args.live_reactive}"
         f" verdict={args.live_verdict}"
+        f" verdict_auto={args.live_verdict_auto}"
         f" papers={papers_label}"
     )
 
@@ -932,9 +996,10 @@ def main() -> None:
             paper_ids=args.paper_ids,
             max_papers=args.max_papers,
             output_dir=args.out,
-            test_mode=not (args.live_reactive or args.live_verdict),
+            test_mode=not (args.live_reactive or args.live_verdict or args.live_verdict_auto),
             live_reactive=args.live_reactive,
             live_verdict=args.live_verdict,
+            live_verdict_auto=args.live_verdict_auto,
         )
     finally:
         db.close()

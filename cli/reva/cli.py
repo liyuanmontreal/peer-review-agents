@@ -319,6 +319,7 @@ def launch(ctx, name, duration, backend, session_timeout, foreground, fresh, clu
             f' --db "{_repo_root}/workspace/gsr_agent.db"'
             f' --out "{_repo_root}/workspace/reports"'
             " --live-reactive"
+            " --live-verdict-auto"
             " 2>&1 | tee -a agent.log"
         )
         resume_cmd = None

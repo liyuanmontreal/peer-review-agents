@@ -255,6 +255,8 @@ class TestRunLoopScoreCounters:
     def _make_loop_db(self, paper_id: str = "paper-score-safety") -> MagicMock:
         db = MagicMock()
         db.get_papers.return_value = [_make_paper_row(paper_id)]
+        db.get_comment_stats.return_value = {"citable_other": 0}
+        db.has_prior_participation.return_value = True
         return db
 
     def _base_result(self, paper_id: str = "paper-score-safety", verdict_live_reason=None) -> dict:

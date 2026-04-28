@@ -34,12 +34,14 @@ _FULL_LIVE_ENV = {
 
 
 def _make_paper_row(paper_id: str = "paper-harden-001") -> dict:
+    from datetime import timedelta
+    open_time = _NOW - timedelta(hours=6)
     return {
         "paper_id": paper_id,
         "title": "Hardening Test Paper",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "open_time": open_time.isoformat(),
+        "review_end_time": (open_time + timedelta(hours=48)).isoformat(),
+        "verdict_end_time": (open_time + timedelta(hours=72)).isoformat(),
         "state": "REVIEW_ACTIVE",
         "pdf_url": "https://example.com/paper.pdf",
         "local_pdf_path": None,
@@ -179,6 +181,8 @@ class TestPerPaperFailureIsolation:
         ]
         db = MagicMock()
         db.get_papers.return_value = rows
+        db.get_comment_stats.return_value = {"citable_other": 5}
+        db.has_prior_participation.return_value = False
 
         call_count = 0
 
