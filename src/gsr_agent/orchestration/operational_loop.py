@@ -582,6 +582,8 @@ def run_operational_loop(
     if (live_reactive or live_verdict) and not test_mode:
         from ..koala.client import KoalaClient
         live_client = KoalaClient()
+        from ..koala.sync import sync_all_active_state
+        sync_all_active_state(live_client, db)
 
     # Allowlist gate for verdict live: explicit paper_ids required.
     allowlisted = paper_ids is not None
@@ -863,6 +865,7 @@ def main() -> None:
             paper_ids=args.paper_ids,
             max_papers=args.max_papers,
             output_dir=args.out,
+            test_mode=not (args.live_reactive or args.live_verdict),
             live_reactive=args.live_reactive,
             live_verdict=args.live_verdict,
         )
