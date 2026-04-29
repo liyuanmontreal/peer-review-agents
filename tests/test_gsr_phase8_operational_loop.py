@@ -9,13 +9,22 @@ import pytest
 
 from gsr_agent.commenting.reactive_analysis import ReactiveAnalysisResult
 from gsr_agent.orchestration.operational_loop import (
+    _LIVE_COMMENT_BUDGET,
+    _LIVE_VERDICT_BUDGET,
     _DryRunClient,
     _paper_from_row,
     _process_paper,
     run_operational_loop,
 )
 from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
-from gsr_agent.strategy.opportunity_manager import CANDIDATE_BUDGET, PaperOpportunity
+from gsr_agent.strategy.opportunity_manager import (
+    CANDIDATE_BUDGET,
+    EXTENDED_COMMENT_MAX,
+    PREFERRED_COMMENT_MIN,
+    PREFERRED_COMMENT_MAX,
+    SATURATED_COMMENT_THRESHOLD,
+    PaperOpportunity,
+)
 
 _MOD = "gsr_agent.orchestration.operational_loop"
 _NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -614,10 +623,20 @@ class TestNewSeedWindowCandidateSelection:
         counters = _run_seed_loop([_make_new_seed_row()], total_comments=0)
         assert counters["papers_processed"] == 0
 
-    def test_new_seed_window_13_comments_saturated(self):
-        """NEW+SEED_WINDOW + 13 total comments → saturated_comments skip (processed == 0)."""
-        counters = _run_seed_loop([_make_new_seed_row()], total_comments=13)
+    def test_new_seed_window_15_comments_saturated(self):
+        """NEW+SEED_WINDOW + 15 total comments → saturated_comments skip (processed == 0)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=15)
         assert counters["papers_processed"] == 0
+
+    def test_new_seed_window_13_comments_still_eligible(self):
+        """NEW+SEED_WINDOW + 13 total comments → eligible (threshold raised to 14)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=13)
+        assert counters["papers_processed"] == 1
+
+    def test_new_seed_window_14_comments_still_eligible(self):
+        """NEW+SEED_WINDOW + 14 total comments → eligible (boundary: 14 <= threshold)."""
+        counters = _run_seed_loop([_make_new_seed_row()], total_comments=14)
+        assert counters["papers_processed"] == 1
 
     def test_review_active_seed_window_selected(self):
         """REVIEW_ACTIVE+SEED_WINDOW + 5 total comments → selected (REVIEW_ACTIVE behavior intact)."""
@@ -629,10 +648,20 @@ class TestNewSeedWindowCandidateSelection:
         counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=0)
         assert counters["papers_processed"] == 0
 
-    def test_review_active_seed_window_13_comments_saturated(self):
-        """REVIEW_ACTIVE+SEED_WINDOW + 13 total comments → saturated_comments skip (processed == 0)."""
-        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=13)
+    def test_review_active_seed_window_15_comments_saturated(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 15 total comments → saturated_comments skip (processed == 0)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=15)
         assert counters["papers_processed"] == 0
+
+    def test_review_active_seed_window_13_comments_still_eligible(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 13 total comments → eligible (threshold raised to 14)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=13)
+        assert counters["papers_processed"] == 1
+
+    def test_review_active_seed_window_14_comments_still_eligible(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 14 total comments → eligible (boundary)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=14)
+        assert counters["papers_processed"] == 1
 
     def test_candidate_budget_limits_but_processed_gt_zero(self):
         """Budget limits to CANDIDATE_BUDGET but processed > 0 for valid NEW+SEED_WINDOW papers."""
@@ -1203,3 +1232,112 @@ class TestSeed404PaperNotFound:
         assert counters["papers_processed"] == 2
         assert counters["errors_count"] == 0
         assert counters["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Endgame budget and ranking constants
+# ---------------------------------------------------------------------------
+
+class TestEndgameBudgetConstants:
+    def test_live_comment_budget_is_3(self):
+        assert _LIVE_COMMENT_BUDGET == 3
+
+    def test_live_verdict_budget_is_2(self):
+        assert _LIVE_VERDICT_BUDGET == 2
+
+
+# ---------------------------------------------------------------------------
+# Endgame sort key: 4-tier ranking for SEED papers
+# ---------------------------------------------------------------------------
+
+def _seed_row(paper_id: str, total: int) -> tuple:
+    """Build a (_row, _paper, SEED, _stats, _recent) tuple for sort_key testing."""
+    row = {
+        "paper_id": paper_id,
+        "title": f"Paper {paper_id}",
+        "open_time": "2026-04-29T00:00:00+00:00",
+        "review_end_time": "2026-04-29T02:00:00+00:00",
+        "verdict_end_time": "2026-04-29T04:00:00+00:00",
+        "state": "REVIEW_ACTIVE",
+        "pdf_url": "",
+        "local_pdf_path": None,
+        "abstract": "A long enough abstract with more than six words here.",
+        "deliberating_at": None,
+    }
+    paper = _paper_from_row(row)
+    stats = {"total": total, "ours": 0, "citable_other": total}
+    return (row, paper, PaperOpportunity.SEED, stats, False)
+
+
+class TestEndgameSortKeyRanking:
+    """Verify the 4-tier seed ranking: 3–10 > 11–14 > 1–2 > 0."""
+
+    def _sort_key(self, item):
+        _, _p, _o, _s, _recent = item
+        _base = 2  # OPPORTUNITY_PRIORITY[SEED]
+        if _o == PaperOpportunity.SEED:
+            _n = _s.get("total", 0)
+            if _n > SATURATED_COMMENT_THRESHOLD:
+                return (3, 0, 0)
+            _r = 1 if _recent else 0
+            if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
+                return (_base, _r, 0)
+            if PREFERRED_COMMENT_MAX < _n <= EXTENDED_COMMENT_MAX:
+                return (_base, _r, 1)
+            if 1 <= _n < PREFERRED_COMMENT_MIN:
+                return (_base, _r, 2)
+            return (_base, _r, 3)
+        return (_base, 0, 0)
+
+    def test_3_comments_outranks_1(self):
+        t3 = _seed_row("p3", 3)
+        t1 = _seed_row("p1", 1)
+        assert self._sort_key(t3) < self._sort_key(t1)
+
+    def test_10_comments_outranks_2(self):
+        t10 = _seed_row("p10", 10)
+        t2 = _seed_row("p2", 2)
+        assert self._sort_key(t10) < self._sort_key(t2)
+
+    def test_11_comments_outranks_0(self):
+        t11 = _seed_row("p11", 11)
+        t0 = _seed_row("p0", 0)
+        assert self._sort_key(t11) < self._sort_key(t0)
+
+    def test_14_comments_outranks_0(self):
+        t14 = _seed_row("p14", 14)
+        t0 = _seed_row("p0", 0)
+        assert self._sort_key(t14) < self._sort_key(t0)
+
+    def test_1_comment_outranks_0(self):
+        t1 = _seed_row("p1", 1)
+        t0 = _seed_row("p0", 0)
+        assert self._sort_key(t1) < self._sort_key(t0)
+
+    def test_3_comments_outranks_11(self):
+        t3 = _seed_row("p3", 3)
+        t11 = _seed_row("p11", 11)
+        assert self._sort_key(t3) < self._sort_key(t11)
+
+    def test_15_comments_is_saturated(self):
+        t15 = _seed_row("p15", 15)
+        assert self._sort_key(t15) == (3, 0, 0)
+
+    def test_0_is_lowest_priority_tier(self):
+        t0 = _seed_row("p0", 0)
+        assert self._sort_key(t0)[2] == 3
+
+    def test_preferred_band_boundaries(self):
+        t_min = _seed_row("pmin", PREFERRED_COMMENT_MIN)
+        t_max = _seed_row("pmax", PREFERRED_COMMENT_MAX)
+        t_below = _seed_row("pbelow", PREFERRED_COMMENT_MIN - 1)
+        t_above = _seed_row("pabove", PREFERRED_COMMENT_MAX + 1)
+        assert self._sort_key(t_min)[2] == 0
+        assert self._sort_key(t_max)[2] == 0
+        assert self._sort_key(t_below)[2] == 2
+        assert self._sort_key(t_above)[2] == 1
+
+    def test_official_eligibility_rules_unchanged(self):
+        """MIN_DISTINCT_OTHER_AGENTS = 3 must remain the verdict gate."""
+        from gsr_agent.rules.verdict_eligibility import MIN_DISTINCT_OTHER_AGENTS
+        assert MIN_DISTINCT_OTHER_AGENTS == 3

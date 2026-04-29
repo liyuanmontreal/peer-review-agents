@@ -546,8 +546,8 @@ class TestRunOperationalLoopLiveVerdict:
         )
         assert counters["live_verdict_submissions"] == 1
 
-    def test_budget_exhausted_after_first_verdict(self):
-        """Second paper gets verdict_live_budget_remaining=0."""
+    def test_budget_decrements_after_first_verdict(self):
+        """Second paper gets verdict_live_budget_remaining=1 after first submitted (budget=2)."""
         live_a = dict(_base_result("p-a"))
         live_a["verdict_live_submitted"] = True
         live_a["verdict_status"] = "live_submitted"
@@ -576,25 +576,27 @@ class TestRunOperationalLoopLiveVerdict:
                 live_verdict=True, test_mode=False, output_dir="/tmp/rep",
             )
 
-        assert call_kwargs[0]["verdict_live_budget_remaining"] == 1
-        assert call_kwargs[1]["verdict_live_budget_remaining"] == 0
+        # First paper: full verdict budget (2)
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 2
+        # Second paper: one slot used, one remaining
+        assert call_kwargs[1]["verdict_live_budget_remaining"] == 1
 
-    def test_max_one_live_verdict_per_run(self):
-        """Both papers return submitted=True; counter still caps budget after first."""
+    def test_max_two_live_verdicts_per_run(self):
+        """After two submitted verdicts, third paper gets verdict_live_budget_remaining=0."""
         result_a = dict(_base_result("p-a"))
         result_a["verdict_live_submitted"] = True
-
         result_b = dict(_base_result("p-b"))
         result_b["verdict_live_submitted"] = True
+        result_c = dict(_base_result("p-c"))
+        result_c["verdict_live_submitted"] = False
 
-        rows = [_make_paper_row("p-a"), _make_paper_row("p-b")]
-        # Mocked _process_paper returns what we give; actual budget enforcement
-        # is verified by checking verdict_live_budget_remaining on second call.
+        rows = [_make_paper_row("p-a"), _make_paper_row("p-b"), _make_paper_row("p-c")]
         call_kwargs = []
 
         def _side(paper, *a, **kw):
             call_kwargs.append(kw)
-            return result_a if paper.paper_id == "p-a" else result_b
+            results = {"p-a": result_a, "p-b": result_b, "p-c": result_c}
+            return results[paper.paper_id]
 
         db = _make_loop_db(rows)
         with (
@@ -606,12 +608,14 @@ class TestRunOperationalLoopLiveVerdict:
         ):
             counters = run_operational_loop(
                 db, _NOW,
-                paper_ids=["p-a", "p-b"],
+                paper_ids=["p-a", "p-b", "p-c"],
                 live_verdict=True, test_mode=False, output_dir="/tmp/rep",
             )
 
-        # Budget passed to second paper is 0 after first was submitted
-        assert call_kwargs[1]["verdict_live_budget_remaining"] == 0
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 2
+        assert call_kwargs[1]["verdict_live_budget_remaining"] == 1
+        # Third paper: budget exhausted after two submissions
+        assert call_kwargs[2]["verdict_live_budget_remaining"] == 0
 
     def test_allowlisted_true_when_paper_ids_provided(self):
         call_kwargs = []

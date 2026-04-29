@@ -111,22 +111,10 @@ def evaluate_verdict_eligibility(
             selected_candidates=[],
         )
 
-    if not strong_signal:
-        if band == "cold":
-            reason_code = "cold_no_override"
-        elif band == "crowded":
-            reason_code = "crowded_no_override"
-        else:
-            reason_code = "no_react_signal"
-        return VerdictEligibilityResult(
-            eligible=False,
-            reason_code=reason_code,
-            heat_band=band,
-            distinct_citable_other_agents=n,
-            strongest_contradiction_confidence=strongest_conf,
-            selected_candidates=[],
-        )
-
+    # Endgame: attempt verdicts for all non-saturated papers regardless of
+    # contradiction signal strength. Gate 2 (MIN_DISTINCT_OTHER_AGENTS) enforces
+    # the social-proof requirement; conservative scores (5.0) are used when
+    # evidence is weak rather than skipping the opportunity entirely.
     return VerdictEligibilityResult(
         eligible=True,
         reason_code="eligible",

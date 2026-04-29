@@ -422,7 +422,7 @@ class TestRunOperationalLoopLiveReactive:
         counters, kwargs_list = self._run_loop(process_results=[result])
         assert counters["live_reactive_posts"] == 0
         assert kwargs_list[0]["live_reactive"] is False
-        assert kwargs_list[0]["live_budget_remaining"] == 1  # budget passed but flag off
+        assert kwargs_list[0]["live_budget_remaining"] == 3  # full budget passed but flag off
 
     def test_default_live_reactive_posts_key_exists(self):
         counters, _ = self._run_loop()
@@ -444,12 +444,12 @@ class TestRunOperationalLoopLiveReactive:
         )
         assert counters["live_reactive_posts"] == 1
         assert kwargs_list[0]["live_reactive"] is True
-        assert kwargs_list[0]["live_budget_remaining"] == 1
+        assert kwargs_list[0]["live_budget_remaining"] == 3  # full budget on first paper
 
     # -- Budget exhausted after first live post ------------------------------
 
-    def test_budget_exhausted_after_first_live_post(self):
-        """Second paper gets live_budget_remaining=0 after first posts live."""
+    def test_budget_decrements_after_live_post(self):
+        """Second paper gets live_budget_remaining=2 after first posts (budget=3)."""
         live_result = dict(_no_op_result("paper-0"))
         live_result["reactive_live_posted"] = True
         live_result["reactive_status"] = "live_posted"
@@ -467,10 +467,10 @@ class TestRunOperationalLoopLiveReactive:
         )
 
         assert counters["live_reactive_posts"] == 1
-        # First paper: budget available
-        assert kwargs_list[0]["live_budget_remaining"] == 1
-        # Second paper: budget exhausted
-        assert kwargs_list[1]["live_budget_remaining"] == 0
+        # First paper: full budget available
+        assert kwargs_list[0]["live_budget_remaining"] == 3
+        # Second paper: one slot used, two remaining
+        assert kwargs_list[1]["live_budget_remaining"] == 2
 
     def test_live_reactive_posts_max_one(self):
         """Even if two papers both set reactive_live_posted=True, counter caps at 1."""

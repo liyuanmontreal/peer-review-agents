@@ -75,6 +75,7 @@ from ..rules.verdict_assembly import (
 from ..rules.verdict_scoring import VerdictScore
 from ..strategy.opportunity_manager import (
     CANDIDATE_BUDGET,
+    EXTENDED_COMMENT_MAX,
     MIN_VERDICT_CITATIONS,
     OPPORTUNITY_PRIORITY,
     PREFERRED_COMMENT_MIN,
@@ -90,6 +91,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _DEDUP_HOURS: float = 12.0
+
+# Endgame live-action budgets per loop run.
+_LIVE_COMMENT_BUDGET: int = 3   # max live reactive/seed posts per loop
+_LIVE_VERDICT_BUDGET: int = 2   # max live verdict submissions per loop
 
 
 def run_preflight_checks(
@@ -787,8 +792,8 @@ def run_operational_loop(
         "summary_path": "",
     }
 
-    live_budget_used = False
-    verdict_live_budget_used = False
+    live_comments_used = 0
+    verdict_submissions_used = 0
     paper_live_results: dict = {}
 
     # Pre-classify all papers once for priority-based selection.
@@ -875,7 +880,11 @@ def run_operational_loop(
         else:
             log.info("[competition] auto_verdict_skipped reason=no_verdict_ready_candidates")
 
-    # Sort by opportunity priority; SEED papers further sorted by total comment crowding.
+    # Sort by opportunity priority; SEED papers further sorted by 4-tier crowding rank.
+    # Tier 0 (best): 3–10 other comments — highest verdict-conversion probability.
+    # Tier 1: 11–14 — still eligible, above fallback.
+    # Tier 2: 1–2 — some social proof, below preferred.
+    # Tier 3 (worst): 0 — cold-start, lowest fallback.
     def _sort_key(item):
         _, _p, _o, _s, _recent = item
         _base = OPPORTUNITY_PRIORITY[_o]
@@ -885,10 +894,12 @@ def run_operational_loop(
                 return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
             _r = 1 if _recent else 0
             if PREFERRED_COMMENT_MIN <= _n <= PREFERRED_COMMENT_MAX:
-                return (_base, _r, 0)  # preferred zone; fresh before recent_action
-            if _n == 0:
-                return (_base, _r, 3)  # cold-start fallback, ranked after 9–12
-            return (_base, _r, 2)  # 9–12: acceptable but below preferred
+                return (_base, _r, 0)  # tier 1: 3–10 (highest)
+            if PREFERRED_COMMENT_MAX < _n <= EXTENDED_COMMENT_MAX:
+                return (_base, _r, 1)  # tier 2: 11–14
+            if 1 <= _n < PREFERRED_COMMENT_MIN:
+                return (_base, _r, 2)  # tier 3: 1–2
+            return (_base, _r, 3)      # tier 4: cold-start (0)
         return (_base, 0, 0)
 
     _sorted = sorted(_classified, key=_sort_key)
@@ -956,8 +967,8 @@ def run_operational_loop(
         paper_id = row["paper_id"]
         try:
             paper = _paper_from_row(row)
-            live_budget_remaining = 0 if live_budget_used else 1
-            verdict_live_budget_remaining = 0 if verdict_live_budget_used else 1
+            live_budget_remaining = max(0, _LIVE_COMMENT_BUDGET - live_comments_used)
+            verdict_live_budget_remaining = max(0, _LIVE_VERDICT_BUDGET - verdict_submissions_used)
             _is_auto_candidate = live_verdict_auto and paper_id == _auto_verdict_paper_id
             _paper_live_verdict = live_verdict or _is_auto_candidate
             _paper_allowlisted = allowlisted or _is_auto_candidate
@@ -983,13 +994,13 @@ def run_operational_loop(
             if live_reason in ("live_posted", "live_gate_failed", "live_budget_exhausted"):
                 counters["reactive_live_eligible"] += 1
             if result.get("reactive_live_posted"):
-                live_budget_used = True
+                live_comments_used += 1
                 counters["live_reactive_posts"] += 1
                 counters["reactive_live_posted"] += 1
             if result.get("seed_draft_created"):
                 counters["seed_drafts_created"] += 1
             if result.get("seed_live_posted"):
-                live_budget_used = True
+                live_comments_used += 1
                 counters["live_reactive_posts"] += 1
             _seed_reason = result.get("seed_live_reason")
             if _seed_reason == "live_posted":
@@ -1016,7 +1027,7 @@ def run_operational_loop(
             if result["verdict_draft_created"]:
                 counters["verdict_drafts_created"] += 1
             if result.get("verdict_live_submitted"):
-                verdict_live_budget_used = True
+                verdict_submissions_used += 1
                 counters["live_verdict_submissions"] += 1
             vlive_reason = result.get("verdict_live_reason")
             if vlive_reason == "missing_verdict_score":

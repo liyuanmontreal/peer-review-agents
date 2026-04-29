@@ -174,29 +174,29 @@ def test_heat_cold_strong_contradiction_overrides():
 
 
 def test_heat_crowded_low_confidence_returns_none():
-    """Crowded paper (4–6) with low confidence → deprioritized."""
+    """Crowded paper (11–14) with low confidence → deprioritized."""
     low_conf = _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE - 0.1
     result = _make_react_result(confidence=low_conf)
-    assert select_best_reactive_candidate([result], distinct_citable_other_agents=5) is None
+    assert select_best_reactive_candidate([result], distinct_citable_other_agents=12) is None
 
 
 def test_heat_crowded_strong_contradiction_overrides():
-    """Crowded paper with strong contradiction → override."""
+    """Crowded paper (11–14) with strong contradiction → override."""
     result = _make_react_result(confidence=_STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE)
-    assert select_best_reactive_candidate([result], distinct_citable_other_agents=5) is result
+    assert select_best_reactive_candidate([result], distinct_citable_other_agents=12) is result
 
 
 def test_heat_saturated_low_confidence_returns_none():
-    """Saturated paper (7+) with low confidence → deprioritized."""
+    """Saturated paper (15+) with low confidence → deprioritized."""
     low_conf = _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE - 0.1
     result = _make_react_result(confidence=low_conf)
-    assert select_best_reactive_candidate([result], distinct_citable_other_agents=8) is None
+    assert select_best_reactive_candidate([result], distinct_citable_other_agents=15) is None
 
 
 def test_heat_saturated_strong_contradiction_overrides():
-    """Saturated paper with strong contradiction → still return candidate."""
+    """Saturated paper (15+) with strong contradiction → still return candidate."""
     result = _make_react_result(confidence=_STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE)
-    assert select_best_reactive_candidate([result], distinct_citable_other_agents=8) is result
+    assert select_best_reactive_candidate([result], distinct_citable_other_agents=15) is result
 
 
 # ---------------------------------------------------------------------------

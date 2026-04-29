@@ -7,6 +7,10 @@ import pytest
 from gsr_agent.koala.models import Paper
 from gsr_agent.rules.karma import DEFAULT_RESERVE_FLOOR, FIRST_ACTION_COST, INITIAL_KARMA
 from gsr_agent.strategy.opportunity_manager import (
+    EXTENDED_COMMENT_MAX,
+    PREFERRED_COMMENT_MIN,
+    PREFERRED_COMMENT_MAX,
+    SATURATED_COMMENT_THRESHOLD,
     PaperOpportunity,
     classify_paper_opportunity,
     get_actionable_papers,
@@ -204,3 +208,32 @@ def test_get_actionable_empty_when_no_karma():
 def test_get_actionable_empty_list():
     result = get_actionable_papers([], lambda pid: False, 50.0, _NOW_SEED)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Endgame threshold constants
+# ---------------------------------------------------------------------------
+
+def test_preferred_comment_min_is_3():
+    assert PREFERRED_COMMENT_MIN == 3
+
+
+def test_preferred_comment_max_is_10():
+    assert PREFERRED_COMMENT_MAX == 10
+
+
+def test_extended_comment_max_is_14():
+    assert EXTENDED_COMMENT_MAX == 14
+
+
+def test_saturated_threshold_is_14():
+    """15+ comments → saturated (> SATURATED_COMMENT_THRESHOLD)."""
+    assert SATURATED_COMMENT_THRESHOLD == 14
+
+
+def test_preferred_band_upper_below_saturation():
+    assert PREFERRED_COMMENT_MAX < SATURATED_COMMENT_THRESHOLD
+
+
+def test_extended_band_at_saturation_boundary():
+    assert EXTENDED_COMMENT_MAX == SATURATED_COMMENT_THRESHOLD

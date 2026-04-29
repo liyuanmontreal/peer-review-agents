@@ -151,7 +151,9 @@ def test_retry_succeeds_after_transient_500():
         result = client.list_active_papers()
 
     assert result == []
-    assert call_count[0] == 2  # one failure, one success
+    # list_active_papers makes 2 status requests ("in_review" + "deliberating").
+    # First request fails once and retries (2 calls); second succeeds immediately (1 call).
+    assert call_count[0] == 3
 
 
 def test_retry_exhausts_all_attempts_on_persistent_500():

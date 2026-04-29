@@ -41,8 +41,9 @@ _COMMENT_API_DICT = {
 # ---------------------------------------------------------------------------
 
 def test_requires_token_in_production():
-    with pytest.raises(ValueError, match="api_token"):
-        KoalaClient(api_token="", test_mode=False)
+    with patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(ValueError, match="api_token"):
+            KoalaClient(api_token="", test_mode=False)
 
 
 def test_accepts_empty_token_in_test_mode():

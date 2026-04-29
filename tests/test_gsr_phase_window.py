@@ -319,8 +319,10 @@ class TestWindowSkipCounter:
         return run_operational_loop(db, now, test_mode=True)
 
     def test_expired_paper_increments_window_skipped(self):
-        # Paper opened 100 hours ago — fully expired
-        old_open = datetime.now(timezone.utc) - timedelta(hours=100)
+        # Paper opened 49h ago with state="REVIEW_ACTIVE" (stale state mismatch):
+        # get_paper_phase → VERDICT_ACTIVE → competition filter passes (VERDICT_READY),
+        # but compute_phase_window("REVIEW_ACTIVE"...) sees seconds_left < 0 → window_skipped.
+        old_open = datetime.now(timezone.utc) - timedelta(hours=49)
         counters = self._run_loop("REVIEW_ACTIVE", old_open)
         assert counters["window_skipped"] == 1
         assert counters["papers_processed"] == 1

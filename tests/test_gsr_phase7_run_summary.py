@@ -113,7 +113,7 @@ class TestBuildPaperSummary:
         assert _default_summary()["micro_phase"] == "BUILD_WINDOW"
 
     def test_heat_band_from_distinct_agents(self):
-        db = _make_db(distinct_agents=2)
+        db = _make_db(distinct_agents=5)
         s = build_paper_summary(_make_paper_row(), db, _NOW)
         assert s["heat_band"] == "goldilocks"
 
@@ -234,7 +234,7 @@ class TestRecommendedNextAction:
 
     def test_saturated_skip_too_crowded(self):
         action = self._summary(
-            distinct_agents=8, citable_other=8, react_count=0,
+            distinct_agents=15, citable_other=15, react_count=0,
             strongest_conf=None, comments_analyzed=1,
         )
         assert action == "skip_too_crowded"
@@ -279,6 +279,25 @@ class TestRecommendedNextAction:
             distinct_agents=3, react_count=1, strongest_conf=0.80, comments_analyzed=1
         )
         assert action == "consider_verdict_draft"
+
+    def test_review_active_seed_window_5_comments_consider_seed(self):
+        """REVIEW_ACTIVE+SEED_WINDOW + 5 total comments → consider_seed_comment."""
+        row = _make_paper_row(open_time=_NOW - timedelta(hours=6))
+        db = MagicMock()
+        db.get_comment_stats.return_value = {"total": 5, "ours": 0, "citable_other": 0}
+        db.get_distinct_other_agent_count.return_value = 0
+        db.get_phase5a_stats.return_value = {
+            "comments_analyzed": 0, "claims_extracted": 0, "claims_verified": 0,
+            "react_count": 0, "skip_count": 0, "unclear_count": 0,
+            "contradicted_count": 0, "supported_count": 0,
+            "insufficient_count": 0, "verification_error_count": 0,
+        }
+        db.get_strongest_contradiction_confidence.return_value = None
+        db.get_latest_action_for_paper.return_value = None
+        s = build_paper_summary(row, db, _NOW)
+        assert s["micro_phase"] == "SEED_WINDOW"
+        assert s["phase"] == "REVIEW_ACTIVE"
+        assert s["recommended_next_action"] == "consider_seed_comment"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +380,7 @@ class TestWriteRunSummaryMarkdown:
         assert _PAPER_ID in text
 
     def test_contains_heat_band(self, tmp_path: Path):
-        _, text = self._run(tmp_path, distinct_agents=2)
+        _, text = self._run(tmp_path, distinct_agents=5)
         assert "goldilocks" in text
 
     def test_contains_recommended_action(self, tmp_path: Path):
@@ -467,20 +486,60 @@ class TestHeatBandInSummary:
     def test_warm_1(self):
         assert self._band(1) == "warm"
 
-    def test_goldilocks_2(self):
-        assert self._band(2) == "goldilocks"
+    def test_warm_2(self):
+        assert self._band(2) == "warm"
 
     def test_goldilocks_3(self):
         assert self._band(3) == "goldilocks"
 
-    def test_crowded_4(self):
-        assert self._band(4) == "crowded"
+    def test_goldilocks_4(self):
+        assert self._band(4) == "goldilocks"
 
-    def test_crowded_6(self):
-        assert self._band(6) == "crowded"
+    def test_goldilocks_6(self):
+        assert self._band(6) == "goldilocks"
 
-    def test_saturated_7(self):
-        assert self._band(7) == "saturated"
+    def test_goldilocks_7(self):
+        assert self._band(7) == "goldilocks"
+
+    def test_crowded_11(self):
+        assert self._band(11) == "crowded"
+
+    def test_crowded_14(self):
+        assert self._band(14) == "crowded"
+
+    def test_saturated_15(self):
+        assert self._band(15) == "saturated"
 
     def test_saturated_large(self):
         assert self._band(100) == "saturated"
+
+
+    def test_seed_live_status_shown_when_present(self, tmp_path: Path):
+        """Seed live status line is displayed when seed fields are present in summary entry."""
+        db = _make_db()
+        summary = build_run_summary(db, _NOW)
+        # Inject seed fields (as done by run_operational_loop via paper_live_results)
+        for entry in summary:
+            entry["seed_draft_created"] = True
+            entry["seed_live_posted"] = False
+            entry["seed_live_reason"] = "draft_created"
+        out = tmp_path / "seed_summary.md"
+        write_run_summary_markdown(summary, out)
+        text = out.read_text(encoding="utf-8")
+        assert "Seed live:" in text
+        assert "draft=True" in text
+
+    def test_seed_live_posted_reason_shown(self, tmp_path: Path):
+        """Seed live line shows reason=live_posted when seed was live-posted."""
+        db = _make_db()
+        summary = build_run_summary(db, _NOW)
+        for entry in summary:
+            entry["seed_draft_created"] = False
+            entry["seed_live_posted"] = True
+            entry["seed_live_reason"] = "live_posted"
+        out = tmp_path / "seed_live_summary.md"
+        write_run_summary_markdown(summary, out)
+        text = out.read_text(encoding="utf-8")
+        assert "Seed live:" in text
+        assert "posted=True" in text
+        assert "reason=live_posted" in text

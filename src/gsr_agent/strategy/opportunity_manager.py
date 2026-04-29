@@ -44,10 +44,12 @@ OPPORTUNITY_PRIORITY: Dict[PaperOpportunity, int] = {
 # Minimum citeable other-agent comments required for a valid verdict opportunity.
 MIN_VERDICT_CITATIONS: int = MIN_DISTINCT_OTHER_AGENTS  # = 3
 
-# SEED comment crowding thresholds (based on citable_other comment count).
-PREFERRED_COMMENT_MIN: int = 1   # inclusive lower bound for preferred seeding zone
-PREFERRED_COMMENT_MAX: int = 8   # inclusive upper bound for preferred seeding zone
-SATURATED_COMMENT_THRESHOLD: int = 12  # > this → SEED candidate is saturated/skipped
+# SEED comment crowding thresholds (based on total comment count).
+# Endgame priority bands: 3-10 (highest) > 11-14 (extended) > 1-2 (low) > 0 (fallback).
+PREFERRED_COMMENT_MIN: int = 3   # inclusive lower bound for highest-priority zone
+PREFERRED_COMMENT_MAX: int = 10  # inclusive upper bound for highest-priority zone
+EXTENDED_COMMENT_MAX: int = 14   # inclusive upper bound for extended eligible zone (11–14)
+SATURATED_COMMENT_THRESHOLD: int = 14  # > this → SEED candidate is saturated/skipped (15+)
 
 # Maximum actionable papers to process per operational-loop run.
 CANDIDATE_BUDGET: int = 8

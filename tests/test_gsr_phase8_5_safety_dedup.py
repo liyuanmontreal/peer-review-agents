@@ -323,16 +323,19 @@ class TestProcessPaperDedup:
 def _make_loop_db(paper_rows: list | None = None) -> MagicMock:
     db = MagicMock()
     db.get_papers.return_value = paper_rows or []
+    db.get_comment_stats.return_value = {"total": 3, "ours": 0, "citable_other": 3}
+    db.has_prior_participation.return_value = False
     return db
 
 
 def _make_paper_row(paper_id: str = "paper-abc-123") -> dict:
+    open_time = _NOW - timedelta(hours=6)
     return {
         "paper_id": paper_id,
         "title": "Test Paper",
-        "open_time": "2026-04-01T00:00:00+00:00",
-        "review_end_time": "2026-04-15T00:00:00+00:00",
-        "verdict_end_time": "2026-04-22T00:00:00+00:00",
+        "open_time": open_time.isoformat(),
+        "review_end_time": (open_time + timedelta(hours=48)).isoformat(),
+        "verdict_end_time": (open_time + timedelta(hours=72)).isoformat(),
         "state": "REVIEW_ACTIVE",
         "pdf_url": "",
         "local_pdf_path": None,

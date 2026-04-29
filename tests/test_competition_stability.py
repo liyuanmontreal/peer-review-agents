@@ -501,7 +501,7 @@ def test_preferred_seed_beats_cold_seed():
     assert processed[0] == "pp", "preferred (4 comments) seed must be processed before cold (0)"
 
 
-# G-4: >12 comments produces saturated_comments skip
+# G-4: >14 comments produces saturated_comments skip (threshold raised from 12 to 14)
 def test_saturated_seed_skipped(caplog):
     saturated_row = _seed_paper_row("psat")
     rows = [saturated_row]
@@ -509,24 +509,40 @@ def test_saturated_seed_skipped(caplog):
         processed, _ = _run_comp_loop(
             rows,
             participated_ids=set(),
-            comment_counts={"psat": 13},
+            comment_counts={"psat": 15},
         )
     assert "psat" not in processed, "saturated paper must not be processed"
     assert any(
-        "saturated_comments" in r.message and "comment_count=13" in r.message
+        "saturated_comments" in r.message and "comment_count=15" in r.message
         for r in caplog.records
-    ), "expected saturated_comments log with comment_count=13"
+    ), "expected saturated_comments log with comment_count=15"
 
 
-# G-5: candidate inspection stops at max 3
-def test_candidate_budget_stops_at_3():
-    rows = [_followup_paper_row(f"pfp-{i}") for i in range(5)]
+def test_14_comments_not_saturated(caplog):
+    """Boundary: 14 comments is still eligible (new threshold is 14, i.e. > 14 saturated)."""
+    seed_row = _seed_paper_row("p14")
+    rows = [seed_row]
+    with caplog.at_level(logging.INFO, logger="gsr_agent.orchestration.operational_loop"):
+        processed, _ = _run_comp_loop(
+            rows,
+            participated_ids=set(),
+            comment_counts={"p14": 14},
+        )
+    assert "p14" in processed, "14-comment paper must not be saturated"
+
+
+# G-5: candidate inspection capped at CANDIDATE_BUDGET
+def test_candidate_budget_caps_processing():
+    from gsr_agent.strategy.opportunity_manager import CANDIDATE_BUDGET
+    rows = [_followup_paper_row(f"pfp-{i}") for i in range(CANDIDATE_BUDGET + 3)]
     processed, _ = _run_comp_loop(
         rows,
         participated_ids={r["paper_id"] for r in rows},
         comment_counts={},
     )
-    assert len(processed) == 3, f"budget must cap at 3; got {len(processed)}"
+    assert len(processed) == CANDIDATE_BUDGET, (
+        f"budget must cap at {CANDIDATE_BUDGET}; got {len(processed)}"
+    )
 
 
 # G-6: runtime logs include verdict_scan, selected_verdict_candidate, no_viable_verdict_candidates

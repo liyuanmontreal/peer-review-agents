@@ -41,73 +41,90 @@ def test_heat_band_1_is_warm():
     assert paper_heat_band(1) == "warm"
 
 
-def test_heat_band_2_is_goldilocks():
-    assert paper_heat_band(2) == "goldilocks"
+def test_heat_band_2_is_warm():
+    assert paper_heat_band(2) == "warm"
 
 
 def test_heat_band_3_is_goldilocks():
     assert paper_heat_band(3) == "goldilocks"
 
 
-def test_heat_band_4_is_crowded():
-    assert paper_heat_band(4) == "crowded"
+def test_heat_band_4_is_goldilocks():
+    assert paper_heat_band(4) == "goldilocks"
 
 
-def test_heat_band_6_is_crowded():
-    assert paper_heat_band(6) == "crowded"
+def test_heat_band_6_is_goldilocks():
+    assert paper_heat_band(6) == "goldilocks"
 
 
-def test_heat_band_7_is_saturated():
-    assert paper_heat_band(7) == "saturated"
+def test_heat_band_7_is_goldilocks():
+    assert paper_heat_band(7) == "goldilocks"
+
+
+def test_heat_band_10_is_goldilocks():
+    assert paper_heat_band(10) == "goldilocks"
+
+
+def test_heat_band_11_is_crowded():
+    assert paper_heat_band(11) == "crowded"
+
+
+def test_heat_band_14_is_crowded():
+    assert paper_heat_band(14) == "crowded"
+
+
+def test_heat_band_15_is_saturated():
+    assert paper_heat_band(15) == "saturated"
 
 
 def test_heat_band_large_is_saturated():
     assert paper_heat_band(50) == "saturated"
 
 
-def test_heat_band_5_is_crowded():
-    assert paper_heat_band(5) == "crowded"
+def test_heat_band_5_is_goldilocks():
+    assert paper_heat_band(5) == "goldilocks"
 
 
 # ---------------------------------------------------------------------------
 # B. Crowding score shape (non-monotonic, peaks at 2)
 # ---------------------------------------------------------------------------
 
-def test_crowding_score_2_beats_1():
-    assert crowding_score(2) > crowding_score(1)
+def test_crowding_score_5_beats_2():
+    assert crowding_score(5) > crowding_score(2)
 
 
-def test_crowding_score_2_beats_4():
-    assert crowding_score(2) > crowding_score(4)
+def test_crowding_score_4_beats_1():
+    assert crowding_score(4) > crowding_score(1)
 
 
-def test_crowding_score_3_beats_5():
-    assert crowding_score(3) > crowding_score(5)
+def test_crowding_score_3_beats_2():
+    assert crowding_score(3) > crowding_score(2)
 
 
 def test_crowding_score_0_below_1():
     assert crowding_score(0) < crowding_score(1)
 
 
-def test_crowding_score_7_below_4():
-    assert crowding_score(7) < crowding_score(4)
+def test_crowding_score_11_below_10():
+    assert crowding_score(11) < crowding_score(10)
 
 
-def test_crowding_score_2_is_maximum():
-    """Score at 2 is the global peak."""
-    assert crowding_score(2) == 1.00
+def test_crowding_score_5_is_maximum():
+    """Score at 5–6 is the global peak (goldilocks centre)."""
+    assert crowding_score(5) == 1.00
+    assert crowding_score(6) == 1.00
 
 
 def test_crowding_score_0_is_low():
     assert crowding_score(0) == 0.15
 
 
-def test_crowding_score_7_is_lowest():
-    assert crowding_score(7) == 0.10
+def test_crowding_score_15_is_saturated():
+    assert crowding_score(15) == 0.10
 
 
 def test_crowding_score_large_equals_saturated():
-    assert crowding_score(100) == crowding_score(7)
+    assert crowding_score(100) == crowding_score(15)
 
 
 def test_crowding_score_returns_float():
@@ -123,20 +140,21 @@ def test_2_agent_paper_scores_higher_than_0_agent():
     assert crowding_score(2) > crowding_score(0)
 
 
-def test_2_agent_paper_scores_higher_than_7_agent():
-    assert crowding_score(2) > crowding_score(7)
+def test_7_agent_paper_scores_higher_than_2_agent():
+    """In endgame model, 7 agents (goldilocks) beats 2 agents (warm)."""
+    assert crowding_score(7) > crowding_score(2)
 
 
-def test_2_agent_paper_is_not_deprioritized():
-    tier, _ = get_seed_crowding_note(2)
+def test_5_agent_paper_is_preferred():
+    tier, _ = get_seed_crowding_note(5)
     assert tier == "prefer"
 
 
 def test_2_agent_paper_is_not_dead_in_heat_band():
-    """2-agent paper must be in goldilocks, never saturated or cold."""
+    """2-agent paper must not be saturated or cold (it is warm)."""
     band = paper_heat_band(2)
-    assert band not in ("cold", "saturated", "crowded")
-    assert band == "goldilocks"
+    assert band not in ("cold", "saturated")
+    assert band == "warm"
 
 
 def test_0_agent_paper_is_soft_penalty_not_hard_ban():
@@ -149,30 +167,30 @@ def test_0_agent_paper_is_soft_penalty_not_hard_ban():
     assert tier != "skip"
 
 
-def test_sort_favors_2_agent_over_0_agent():
+def test_sort_favors_5_agent_over_0_agent():
     p0 = _make_paper("p-cold")
-    p2 = _make_paper("p-goldilocks")
-    counts = {"p-cold": 0, "p-goldilocks": 2}
-    sorted_papers = sort_seed_papers_by_crowding([p0, p2], counts)
+    p5 = _make_paper("p-goldilocks")
+    counts = {"p-cold": 0, "p-goldilocks": 5}
+    sorted_papers = sort_seed_papers_by_crowding([p0, p5], counts)
     assert sorted_papers[0].paper_id == "p-goldilocks"
     assert sorted_papers[1].paper_id == "p-cold"
 
 
-def test_sort_favors_2_agent_over_7_agent():
-    p2 = _make_paper("p-goldilocks")
-    p7 = _make_paper("p-saturated")
-    counts = {"p-goldilocks": 2, "p-saturated": 7}
-    sorted_papers = sort_seed_papers_by_crowding([p7, p2], counts)
+def test_sort_favors_5_agent_over_15_agent():
+    p5 = _make_paper("p-goldilocks")
+    p15 = _make_paper("p-saturated")
+    counts = {"p-goldilocks": 5, "p-saturated": 15}
+    sorted_papers = sort_seed_papers_by_crowding([p15, p5], counts)
     assert sorted_papers[0].paper_id == "p-goldilocks"
 
 
 def test_sort_full_ordering():
-    """Verify full sort: goldilocks > warm > cold > saturated."""
+    """Verify full sort: goldilocks (5) > warm (1) > cold (0) > saturated (15)."""
     p_cold = _make_paper("cold")
     p_warm = _make_paper("warm")
     p_gold = _make_paper("gold")
     p_sat = _make_paper("sat")
-    counts = {"cold": 0, "warm": 1, "gold": 2, "sat": 8}
+    counts = {"cold": 0, "warm": 1, "gold": 5, "sat": 15}
     result = sort_seed_papers_by_crowding([p_sat, p_cold, p_warm, p_gold], counts)
     ids = [p.paper_id for p in result]
     assert ids[0] == "gold"
@@ -204,19 +222,25 @@ def test_cold_paper_emits_too_cold_no_social_proof():
 
 
 def test_saturated_paper_emits_too_crowded_low_marginal_value():
-    tier, reason = get_seed_crowding_note(7)
+    tier, reason = get_seed_crowding_note(15)
     assert tier == "deprioritize"
     assert reason == "too_crowded_low_marginal_value"
 
 
 def test_crowded_paper_emits_too_crowded_low_marginal_value():
-    tier, reason = get_seed_crowding_note(5)
+    tier, reason = get_seed_crowding_note(12)
     assert tier == "deprioritize"
     assert reason == "too_crowded_low_marginal_value"
 
 
 def test_goldilocks_paper_no_reason():
-    tier, reason = get_seed_crowding_note(3)
+    tier, reason = get_seed_crowding_note(5)
+    assert tier == "prefer"
+    assert reason is None
+
+
+def test_goldilocks_paper_10_no_reason():
+    tier, reason = get_seed_crowding_note(10)
     assert tier == "prefer"
     assert reason is None
 
@@ -229,7 +253,7 @@ def test_warm_paper_no_reason():
 
 def test_all_counts_have_valid_tier():
     valid_tiers = {"prefer", "neutral", "deprioritize"}
-    for n in range(12):
+    for n in range(20):
         tier, _ = get_seed_crowding_note(n)
         assert tier in valid_tiers, f"count={n} produced invalid tier {tier!r}"
 

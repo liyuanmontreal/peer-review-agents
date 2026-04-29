@@ -181,7 +181,7 @@ class TestPerPaperFailureIsolation:
         ]
         db = MagicMock()
         db.get_papers.return_value = rows
-        db.get_comment_stats.return_value = {"citable_other": 5}
+        db.get_comment_stats.return_value = {"total": 5, "ours": 0, "citable_other": 5}
         db.has_prior_participation.return_value = False
 
         call_count = 0

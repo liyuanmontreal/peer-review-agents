@@ -118,83 +118,89 @@ def _make_valid_citations(n: int = 3) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 class TestEvaluateVerdictEligibility:
+    """Endgame model: only saturated (15+ other agents) is ineligible.
+    All other heat bands pass Gate 1 regardless of contradiction signal strength.
+    Gate 2 (MIN_DISTINCT_OTHER_AGENTS) is the social-proof enforcer.
+    """
+
     def test_goldilocks_strong_reactive_is_eligible(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
+        db = _make_db(citable_other=5)
         result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.80)])
         assert result.eligible is True
         assert result.reason_code == "eligible"
         assert result.heat_band == "goldilocks"
 
-    def test_warm_strong_reactive_is_eligible(self):
+    def test_warm_any_signal_is_eligible(self):
         paper = _make_paper()
         db = _make_db(citable_other=1)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.76)])
+        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.40)])
         assert result.eligible is True
         assert result.reason_code == "eligible"
         assert result.heat_band == "warm"
 
-    def test_cold_strong_reactive_override_is_eligible(self):
-        """Cold + confidence >= 0.75 overrides the soft heat penalty."""
+    def test_cold_no_react_is_eligible(self):
+        """Cold papers pass Gate 1 (Gate 2 handles social-proof enforcement)."""
         paper = _make_paper()
         db = _make_db(citable_other=0)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.75)])
+        result = evaluate_verdict_eligibility(paper, db, [])
         assert result.eligible is True
         assert result.reason_code == "eligible"
         assert result.heat_band == "cold"
 
-    def test_crowded_weak_reactive_is_not_eligible(self):
-        """Crowded paper with confidence < 0.75 — no override."""
+    def test_goldilocks_weak_reactive_is_eligible(self):
+        """Endgame: non-saturated papers are eligible regardless of signal strength."""
         paper = _make_paper()
         db = _make_db(citable_other=5)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.60)])
-        assert result.eligible is False
-        assert result.reason_code == "crowded_no_override"
-        assert result.heat_band == "crowded"
+        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.30)])
+        assert result.eligible is True
+        assert result.reason_code == "eligible"
+        assert result.heat_band == "goldilocks"
 
-    def test_crowded_strong_reactive_override_is_eligible(self):
-        """Crowded + confidence >= 0.75 overrides the soft heat penalty."""
+    def test_crowded_any_signal_is_eligible(self):
+        """Endgame: crowded (11–14) papers pass Gate 1."""
         paper = _make_paper()
-        db = _make_db(citable_other=4)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.76)])
+        db = _make_db(citable_other=12)
+        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.40)])
         assert result.eligible is True
         assert result.reason_code == "eligible"
         assert result.heat_band == "crowded"
 
     def test_saturated_strong_reactive_is_not_eligible(self):
-        """Saturated is always ineligible in v0 regardless of signal strength."""
+        """Saturated (15+) is always ineligible regardless of signal strength."""
         paper = _make_paper()
-        db = _make_db(citable_other=10)
+        db = _make_db(citable_other=15)
         result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.90)])
         assert result.eligible is False
         assert result.reason_code == "saturated_low_value_v0"
         assert result.heat_band == "saturated"
 
-    def test_goldilocks_no_react_is_not_eligible(self):
+    def test_saturated_at_boundary_15(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
-        result = evaluate_verdict_eligibility(paper, db, [_make_skip_result()])
-        assert result.eligible is False
-        assert result.reason_code == "no_react_signal"
-        assert result.heat_band == "goldilocks"
-
-    def test_cold_no_react_reason_is_cold_no_override(self):
-        paper = _make_paper()
-        db = _make_db(citable_other=0)
+        db = _make_db(citable_other=15)
         result = evaluate_verdict_eligibility(paper, db, [])
         assert result.eligible is False
-        assert result.reason_code == "cold_no_override"
+        assert result.heat_band == "saturated"
 
-    def test_warm_weak_reactive_reason_is_no_react_signal(self):
+    def test_not_saturated_at_boundary_14(self):
         paper = _make_paper()
-        db = _make_db(citable_other=1)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.50)])
-        assert result.eligible is False
-        assert result.reason_code == "no_react_signal"
+        db = _make_db(citable_other=14)
+        result = evaluate_verdict_eligibility(paper, db, [])
+        assert result.eligible is True
+        assert result.heat_band == "crowded"
+
+    def test_goldilocks_no_react_is_eligible(self):
+        """Endgame: goldilocks papers are eligible without reactive signal."""
+        paper = _make_paper()
+        db = _make_db(citable_other=5)
+        result = evaluate_verdict_eligibility(paper, db, [_make_skip_result()])
+        assert result.eligible is True
+        assert result.reason_code == "eligible"
+        assert result.heat_band == "goldilocks"
 
     def test_selected_candidates_capped_at_three(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
+        db = _make_db(citable_other=5)
         react_results = [
             _make_react_result(comment_id=f"cmt-{i}", confidence=0.80)
             for i in range(5)
@@ -203,28 +209,29 @@ class TestEvaluateVerdictEligibility:
         assert result.eligible is True
         assert len(result.selected_candidates) == 3
 
-    def test_selected_candidates_empty_when_ineligible(self):
+    def test_selected_candidates_empty_when_saturated(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=15)
         result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.90)])
         assert result.eligible is False
         assert result.selected_candidates == []
 
     def test_strongest_contradiction_confidence_set_when_eligible(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
+        db = _make_db(citable_other=5)
         result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.82)])
         assert result.strongest_contradiction_confidence == pytest.approx(0.82)
 
     def test_strongest_contradiction_confidence_is_none_when_no_react(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
+        db = _make_db(citable_other=5)
         result = evaluate_verdict_eligibility(paper, db, [])
         assert result.strongest_contradiction_confidence is None
+        assert result.eligible is True
 
     def test_strongest_confidence_is_max_across_candidates(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
+        db = _make_db(citable_other=5)
         results = [
             _make_react_result(comment_id="cmt-a", confidence=0.76),
             _make_react_result(comment_id="cmt-b", confidence=0.91),
@@ -232,41 +239,27 @@ class TestEvaluateVerdictEligibility:
         result = evaluate_verdict_eligibility(paper, db, results)
         assert result.strongest_contradiction_confidence == pytest.approx(0.91)
 
-    def test_heat_band_7_is_saturated_boundary(self):
+    def test_heat_band_14_is_crowded_eligible(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=14)
         result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.95)])
-        assert result.heat_band == "saturated"
-        assert result.eligible is False
-
-    def test_heat_band_6_is_crowded_boundary(self):
-        paper = _make_paper()
-        db = _make_db(citable_other=6)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.60)])
         assert result.heat_band == "crowded"
-        assert result.eligible is False
-        assert result.reason_code == "crowded_no_override"
-
-    def test_exact_threshold_075_is_strong_signal(self):
-        """confidence == 0.75 (exact boundary) counts as strong signal."""
-        paper = _make_paper()
-        db = _make_db(citable_other=2)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.75)])
         assert result.eligible is True
 
-    def test_just_below_threshold_074_is_not_strong_signal(self):
+    def test_heat_band_10_is_goldilocks_eligible(self):
         paper = _make_paper()
-        db = _make_db(citable_other=2)
-        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.74)])
-        assert result.eligible is False
-        assert result.reason_code == "no_react_signal"
+        db = _make_db(citable_other=10)
+        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.60)])
+        assert result.heat_band == "goldilocks"
+        assert result.eligible is True
 
-    def test_empty_reactive_results_goldilocks(self):
+    def test_empty_reactive_results_goldilocks_eligible(self):
+        """Endgame: goldilocks + no reactive evidence → still eligible (weak signal ok)."""
         paper = _make_paper()
-        db = _make_db(citable_other=3)
+        db = _make_db(citable_other=5)
         result = evaluate_verdict_eligibility(paper, db, [])
-        assert result.eligible is False
-        assert result.reason_code == "no_react_signal"
+        assert result.eligible is True
+        assert result.reason_code == "eligible"
         assert result.heat_band == "goldilocks"
 
 
@@ -518,26 +511,26 @@ class TestBuildVerdictDraft:
 class TestPlanVerdictForPaper:
     def test_ineligible_returns_skipped_status(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=15)
         result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.90)], _NOW)
         assert result["status"] == "skipped"
         assert result["eligible"] is False
 
     def test_ineligible_returns_no_artifact_url(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=15)
         result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.90)], _NOW)
         assert result["artifact_url"] is None
 
     def test_ineligible_does_not_log_action(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=15)
         plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.90)], _NOW)
         db.log_action.assert_not_called()
 
     def test_ineligible_returns_reason_code(self):
         paper = _make_paper()
-        db = _make_db(citable_other=7)
+        db = _make_db(citable_other=15)
         result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.90)], _NOW)
         assert result["reason_code"] == "saturated_low_value_v0"
 
@@ -611,12 +604,13 @@ class TestPlanVerdictForPaper:
         )
         assert result["status"] == "dry_run"
 
-    def test_no_react_results_returns_skipped(self):
+    def test_no_react_results_still_produces_dry_run(self):
+        """Endgame: goldilocks papers with valid citations produce dry_run even without reactive signal."""
         paper = _make_paper()
         db = _make_db(citable_other=3)
         result = plan_verdict_for_paper(paper, db, [], _NOW)
-        assert result["status"] == "skipped"
-        assert result["reason_code"] == "no_react_signal"
+        assert result["status"] == "dry_run"
+        assert result["eligible"] is True
 
     def test_details_in_log_action_contain_reason_code(self):
         paper = _make_paper()
@@ -709,10 +703,10 @@ class TestPlanVerdictForPaper:
         assert result["status"] == "dry_run"
         assert result["artifact_url"] is not None
 
-    def test_crowded_strong_override_with_sufficient_citations_produces_artifact(self):
-        """Crowded + strong override + >= 3 distinct citations → full success path."""
+    def test_goldilocks_with_sufficient_citations_produces_artifact(self):
+        """Goldilocks + >= 3 distinct citations → full success path (no strong signal needed)."""
         paper = _make_paper()
-        db = _make_db(citable_other=4)  # crowded band, 4 distinct agents
-        result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.80)], _NOW)
+        db = _make_db(citable_other=5)  # goldilocks band (3-10), 5 distinct agents
+        result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.40)], _NOW)
         assert result["status"] == "dry_run"
-        assert result["heat_band"] == "crowded"
+        assert result["heat_band"] == "goldilocks"
