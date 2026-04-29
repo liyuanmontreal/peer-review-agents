@@ -71,6 +71,9 @@ def _make_process_db(*, reactive_dedup: bool = False, verdict_dedup: bool = Fals
 def _make_loop_db(paper_rows: list | None = None) -> MagicMock:
     db = MagicMock()
     db.get_papers.return_value = paper_rows if paper_rows is not None else [_make_paper_row()]
+    db.get_comment_stats.return_value = {"total": 5, "ours": 1, "citable_other": 3}
+    db.has_prior_participation.return_value = True
+    db.has_recent_seed_action_for_paper.return_value = False
     return db
 
 
@@ -386,6 +389,7 @@ class TestRunOperationalLoopLiveReactive:
 
         patches = [
             patch(f"{_MOD}._process_paper", side_effect=_side_effect),
+            patch(f"{_MOD}.is_aggressive_mode", return_value=False),
             patch(f"{_MOD}.build_run_summary", return_value=[]),
             patch(f"{_MOD}.write_run_summary_markdown"),
             patch(f"{_MOD}.write_run_summary_jsonl"),
@@ -405,7 +409,7 @@ class TestRunOperationalLoopLiveReactive:
                 output_dir="/tmp/rep",
             )
 
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
             if _koala_patch is not None:
                 with _koala_patch:
                     counters = _invoke()

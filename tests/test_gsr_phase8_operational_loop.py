@@ -70,6 +70,11 @@ def _make_reactive_result(recommendation: str = "react") -> ReactiveAnalysisResu
 def _make_db(paper_rows: list | None = None) -> MagicMock:
     db = MagicMock()
     db.get_papers.return_value = paper_rows if paper_rows is not None else [_make_paper_row()]
+    # Participation=True + ours=1 ensures papers classify as FOLLOWUP in BUILD_WINDOW,
+    # passing the candidate filter even when KOALA_AGGRESSIVE_FINAL_24H=1.
+    db.get_comment_stats.return_value = {"total": 5, "ours": 1, "citable_other": 3}
+    db.has_prior_participation.return_value = True
+    db.has_recent_seed_action_for_paper.return_value = False
     return db
 
 
@@ -605,6 +610,7 @@ def _run_seed_loop(rows: list, total_comments: int) -> dict:
 
     with (
         patch(f"{_MOD}._process_paper", return_value=_no_op_result()),
+        patch(f"{_MOD}.is_aggressive_mode", return_value=False),
         patch(f"{_MOD}.build_run_summary", return_value=[]),
         patch(f"{_MOD}.write_run_summary_markdown"),
         patch(f"{_MOD}.write_run_summary_jsonl"),
@@ -702,6 +708,7 @@ def _run_seed_loop_with_recent(
 
     with (
         patch(f"{_MOD}._process_paper", side_effect=_capture),
+        patch(f"{_MOD}.is_aggressive_mode", return_value=False),
         patch(f"{_MOD}.build_run_summary", return_value=[]),
         patch(f"{_MOD}.write_run_summary_markdown"),
         patch(f"{_MOD}.write_run_summary_jsonl"),

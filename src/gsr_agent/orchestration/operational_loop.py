@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, TYPE_CHECKING
@@ -73,6 +75,14 @@ from ..rules.verdict_assembly import (
     select_distinct_other_agent_citations,
 )
 from ..rules.verdict_scoring import VerdictScore
+from ..strategy.aggressive_mode import (
+    AGGRESSIVE_CANDIDATE_BUDGET,
+    AGGRESSIVE_LIVE_COMMENT_BUDGET,
+    AGGRESSIVE_LIVE_VERDICT_BUDGET,
+    AGGRESSIVE_REPEAT_STRONG_SIGNAL,
+    AGGRESSIVE_SEED_MIN_CITABLE,
+    is_aggressive_mode,
+)
 from ..strategy.opportunity_manager import (
     CANDIDATE_BUDGET,
     EXTENDED_COMMENT_MAX,
@@ -91,6 +101,18 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _DEDUP_HOURS: float = 12.0
+
+_CONTRA_VERDICTS = frozenset({"refuted", "contradicted", "contradiction"})
+
+
+def _reactive_max_conf(candidate: Any) -> float:
+    """Return the highest contradiction confidence from a ReactiveAnalysisResult."""
+    return max(
+        (float(v.get("confidence") or 0) for v in candidate.verifications
+         if (v.get("verdict") or "").strip().lower() in _CONTRA_VERDICTS),
+        default=0.0,
+    )
+
 
 # Endgame live-action budgets per loop run.
 _LIVE_COMMENT_BUDGET: int = 3   # max live reactive/seed posts per loop
@@ -307,6 +329,7 @@ def _process_paper(
     verdict_live_budget_remaining: int = 0,
     allowlisted: bool = False,
     score: Optional[float] = None,
+    aggressive_mode: bool = False,
 ) -> dict:
     """Run the full Phase 5→6 pipeline for a single paper.
 
@@ -369,6 +392,24 @@ def _process_paper(
     reactive_results = analyze_reactive_candidates_for_paper(paper.paper_id, db)
     candidate = select_best_reactive_candidate_for_paper(paper.paper_id, reactive_results, db)
 
+    # Aggressive mode: if we already commented and are not yet in verdict window, require
+    # a strong contradiction signal to post a follow-up (broad coverage > deep engagement).
+    if (
+        aggressive_mode
+        and candidate is not None
+        and _stats_for_log.get("ours", 0) >= 1
+        and not verdict_phase_ok
+        and _reactive_max_conf(candidate) < AGGRESSIVE_REPEAT_STRONG_SIGNAL
+    ):
+        log.info(
+            "[aggressive_mode] comment_path=skipped paper_id=%s "
+            "reason=repeat_depth_suppressed ours=%d conf=%.2f",
+            paper.paper_id,
+            _stats_for_log.get("ours", 0),
+            _reactive_max_conf(candidate),
+        )
+        candidate = None
+
     reactive_status = "none"
     reactive_reason: Optional[str] = None
     reactive_artifact: Optional[str] = None
@@ -382,6 +423,11 @@ def _process_paper(
         reactive_reason = "recent_reactive_action"
         reactive_live_reason = "dedup_skipped"
     else:
+        if aggressive_mode:
+            log.info(
+                "[aggressive_mode] comment_path=reactive_short paper_id=%s citable_other=%d",
+                paper.paper_id, _stats_for_log.get("citable_other", 0),
+            )
         env_run_mode = get_run_mode() if not test_mode else "test"
         live_allowed = (
             live_reactive
@@ -463,9 +509,14 @@ def _process_paper(
         get_micro_phase(now, paper.open_time) == MicroPhase.SEED_WINDOW
         and phase_window.seconds_left > SAFETY_BUFFER_S
     )
-    if candidate is None and (comment_phase_ok or seed_window_ok):
+    # In aggressive mode, allow seeding in review phase even past SEED_WINDOW.
+    aggressive_seed_ok = aggressive_mode and comment_phase_ok and phase_window.seconds_left > SAFETY_BUFFER_S
+    if candidate is None and (comment_phase_ok or seed_window_ok or aggressive_seed_ok):
         _participated = db.has_prior_participation(paper.paper_id)
         _opp = classify_paper_opportunity(paper, _participated, karma_remaining, now)
+        # Aggressive override: treat as SEED if not participated and pre-passed opportunity is SEED.
+        if aggressive_mode and not _participated and _opp == PaperOpportunity.SKIP and opportunity == PaperOpportunity.SEED:
+            _opp = PaperOpportunity.SEED
         _has_seed_candidate_log = (_opp == PaperOpportunity.SEED)
         if _opp != PaperOpportunity.SEED:
             seed_live_reason = "no_candidate"
@@ -477,6 +528,11 @@ def _process_paper(
                 paper.paper_id,
             )
         else:
+            if aggressive_mode:
+                log.info(
+                    "[aggressive_mode] comment_path=paper_short paper_id=%s",
+                    paper.paper_id,
+                )
             env_run_mode_s = get_run_mode() if not test_mode else "test"
             live_seed_allowed = (
                 live_reactive
@@ -484,7 +540,7 @@ def _process_paper(
                 and env_run_mode_s == "live"
                 and live_budget_remaining > 0
                 and live_client is not None
-                and seed_window_ok
+                and (seed_window_ok or aggressive_seed_ok)
             )
             if not live_reactive:
                 seed_live_reason = "live_disabled"
@@ -496,7 +552,7 @@ def _process_paper(
                 seed_live_reason = "seed_gate_budget"
             elif live_client is None:
                 seed_live_reason = "seed_gate_no_client"
-            elif not seed_window_ok:
+            elif not seed_window_ok and not aggressive_seed_ok:
                 seed_live_reason = "seed_gate_window"
 
             if live_seed_allowed:
@@ -539,6 +595,11 @@ def _process_paper(
     # submit_verdict is never called unless live_verdict_allowed is True.
     # ---------------------------------------------------------------------------
     eligibility = evaluate_verdict_eligibility(paper, db, reactive_results)
+    if aggressive_mode:
+        log.info(
+            "[aggressive_mode] verdict_path=lightweight paper_id=%s eligible=%s citable_other=%d",
+            paper.paper_id, eligibility.eligible, eligibility.distinct_citable_other_agents,
+        )
     verdict_status = "ineligible"
     verdict_reason: Optional[str] = None
     verdict_artifact: Optional[str] = None
@@ -740,6 +801,15 @@ def run_operational_loop(
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    print("[loop] PHASE load_state START", flush=True)
+
+    _aggressive = is_aggressive_mode()
+    _live_comment_budget = AGGRESSIVE_LIVE_COMMENT_BUDGET if _aggressive else _LIVE_COMMENT_BUDGET
+    _live_verdict_budget = AGGRESSIVE_LIVE_VERDICT_BUDGET if _aggressive else _LIVE_VERDICT_BUDGET
+    _candidate_budget = AGGRESSIVE_CANDIDATE_BUDGET if _aggressive else CANDIDATE_BUDGET
+    if _aggressive:
+        log.info("[aggressive_mode] ENABLED budgets: comment=%d verdict=%d candidates=%d",
+                 _live_comment_budget, _live_verdict_budget, _candidate_budget)
 
     client = _DryRunClient()
 
@@ -748,13 +818,19 @@ def run_operational_loop(
         from ..koala.client import KoalaClient
         live_client = KoalaClient()
         from ..koala.sync import sync_all_active_state
+        print("[loop] PHASE sync_papers START", flush=True)
+        _sync_t0 = time.monotonic()
         sync_all_active_state(live_client, db)
+        print(f"[loop] PHASE sync_papers DONE elapsed={time.monotonic()-_sync_t0:.1f}s", flush=True)
 
     # Allowlist gate for verdict live: explicit paper_ids required.
     allowlisted = paper_ids is not None
 
+    print("[loop] PHASE load_state DONE", flush=True)
+    _db_t0 = time.monotonic()
     papers = db.get_papers(paper_ids)
     papers_seen = len(papers)
+    print(f"[loop] PHASE load_candidates START papers={papers_seen} db_elapsed={time.monotonic()-_db_t0:.1f}s", flush=True)
 
     if max_papers is not None:
         papers = papers[:max_papers]
@@ -803,12 +879,49 @@ def run_operational_loop(
         _participated = db.has_prior_participation(_p.paper_id)
         _opp = classify_paper_opportunity(_p, _participated, karma_remaining, now)
         _stats = db.get_comment_stats(_p.paper_id)
+        log.info(
+            "[competition] comment_stats paper_id=%s total=%d ours=%d citable_other=%d",
+            _p.paper_id, _stats.get("total", 0), _stats.get("ours", 0), _stats.get("citable_other", 0),
+        )
+        # Aggressive mode: promote SKIP → SEED for non-participated papers in review
+        # phase that have ≥ AGGRESSIVE_SEED_MIN_CITABLE distinct other-agent comments.
+        # These are high-value funnel seeds: quick first comment now → verdict-eligible later.
+        if (
+            _aggressive
+            and _opp == PaperOpportunity.SKIP
+            and not _participated
+            and _stats.get("citable_other", 0) >= AGGRESSIVE_SEED_MIN_CITABLE
+            and _p.state in ("REVIEW_ACTIVE", "in_review", "NEW")
+        ):
+            _opp = PaperOpportunity.SEED
+            log.info(
+                "[aggressive_mode] promoted_seed paper_id=%s citable_other=%d",
+                _p.paper_id, _stats.get("citable_other", 0),
+            )
         _recent_seed = (
             _opp == PaperOpportunity.SEED
             and db.has_recent_seed_action_for_paper(_p.paper_id, now)
         )
         _classified.append((_row, _p, _opp, _stats, _recent_seed))
 
+    # Aggressive-mode funnel summary: shows verdict pipeline health at a glance.
+    if _aggressive:
+        _f_scanned = len(_classified)
+        _f_with_own = sum(1 for _, _, _o, _s, _ in _classified if _s.get("ours", 0) > 0)
+        _f_own_need1 = sum(1 for _, _, _o, _s, _ in _classified
+                           if _s.get("ours", 0) > 0 and _s.get("citable_other", 0) == 2)
+        _f_own_need0 = sum(1 for _, _, _o, _s, _ in _classified
+                           if _s.get("ours", 0) > 0 and _s.get("citable_other", 0) >= 3)
+        _f_own_1other = sum(1 for _, _, _o, _s, _ in _classified
+                            if _s.get("ours", 0) > 0 and _s.get("citable_other", 0) == 1)
+        log.info(
+            "[aggressive_funnel] scanned=%d with_own_comment=%d "
+            "own+1_other=%d own+2_others=%d own+3+_others=%d",
+            _f_scanned, _f_with_own, _f_own_1other, _f_own_need1, _f_own_need0,
+        )
+
+    print("[loop] PHASE load_candidates DONE", flush=True)
+    print("[loop] PHASE verdict_scan START", flush=True)
     # Verdict opportunity scan: deliberating + VERDICT_READY papers.
     _verdict_opportunities: list[dict] = []
     for _r, _p, _o, _s, _ in _classified:
@@ -865,6 +978,7 @@ def run_operational_loop(
     else:
         log.info("[competition] no_viable_verdict_candidates")
     _write_verdict_opportunities_report(_verdict_opportunities, out_dir)
+    print(f"[loop] PHASE verdict_scan DONE opportunities={len(_verdict_opportunities)}", flush=True)
 
     # Phase 10.5: auto-verdict candidate selection (gsr_agent only).
     # Candidates already satisfy: deliberating phase + own comment + ≥MIN_VERDICT_CITATIONS.
@@ -888,6 +1002,28 @@ def run_operational_loop(
     def _sort_key(item):
         _, _p, _o, _s, _recent = item
         _base = OPPORTUNITY_PRIORITY[_o]
+        if _aggressive:
+            # Aggressive mode: sort by citable_other (verdict-funnel signal) rather than total.
+            _citable = _s.get("citable_other", 0)
+            if _o == PaperOpportunity.VERDICT_READY:
+                return (_base, 0, -_citable)
+            if _o == PaperOpportunity.FOLLOWUP:
+                # Priority B: participated + 2 citable (need 1 more for verdict) comes first.
+                _tier = 0 if _citable >= 2 else 1
+                return (_base, _tier, -_citable)
+            if _o == PaperOpportunity.SEED:
+                _n = _s.get("total", 0)
+                if _n > SATURATED_COMMENT_THRESHOLD:
+                    return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
+                # Priority C: 2–4 citable others = prime verdict-funnel target.
+                if 2 <= _citable <= 4:
+                    return (_base, 0, -_citable)
+                if _citable > 4:
+                    return (_base, 1, -_citable)
+                if _citable == 1:
+                    return (_base, 2, 0)
+                return (_base, 3, 0)  # cold
+            return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
         if _o == PaperOpportunity.SEED:
             _n = _s.get("total", 0)
             if _n > SATURATED_COMMENT_THRESHOLD:
@@ -949,9 +1085,9 @@ def run_operational_loop(
                 log.info("[competition] selected_seed_candidate paper_id=%s", _p.paper_id)
         _candidates.append(_r)
 
-    _inspected = min(len(_candidates), CANDIDATE_BUDGET)
-    log.info("[competition] candidate_budget inspected=%d max=%d", _inspected, CANDIDATE_BUDGET)
-    papers = _candidates[:CANDIDATE_BUDGET]
+    _inspected = min(len(_candidates), _candidate_budget)
+    log.info("[competition] candidate_budget inspected=%d max=%d", _inspected, _candidate_budget)
+    papers = _candidates[:_candidate_budget]
 
     # Ensure auto-verdict candidate is in the processing list even if outside CANDIDATE_BUDGET.
     if _auto_verdict_paper_id is not None:
@@ -963,12 +1099,14 @@ def run_operational_loop(
             if _auto_row is not None:
                 papers = [_auto_row, *papers]
 
+    print(f"[loop] PHASE reactive_scan START candidates={len(papers)}", flush=True)
     for row in papers:
         paper_id = row["paper_id"]
         try:
             paper = _paper_from_row(row)
-            live_budget_remaining = max(0, _LIVE_COMMENT_BUDGET - live_comments_used)
-            verdict_live_budget_remaining = max(0, _LIVE_VERDICT_BUDGET - verdict_submissions_used)
+            log.info("[loop] paper=%s processing", paper_id)
+            live_budget_remaining = max(0, _live_comment_budget - live_comments_used)
+            verdict_live_budget_remaining = max(0, _live_verdict_budget - verdict_submissions_used)
             _is_auto_candidate = live_verdict_auto and paper_id == _auto_verdict_paper_id
             _paper_live_verdict = live_verdict or _is_auto_candidate
             _paper_allowlisted = allowlisted or _is_auto_candidate
@@ -981,6 +1119,7 @@ def run_operational_loop(
                 live_verdict=_paper_live_verdict,
                 verdict_live_budget_remaining=verdict_live_budget_remaining,
                 allowlisted=_paper_allowlisted,
+                aggressive_mode=_aggressive,
             )
             counters["papers_processed"] += 1
             if result["has_reactive_candidate"]:
@@ -1074,6 +1213,17 @@ def run_operational_loop(
             })
             counters["errors_count"] += 1
 
+    print("[loop] PHASE reactive_scan DONE", flush=True)
+    if _aggressive:
+        log.info(
+            "[aggressive_funnel] FINAL comments_posted=%d verdicts_submitted=%d "
+            "comment_budget_used=%d/%d verdict_budget_used=%d/%d",
+            counters["live_reactive_posts"],
+            counters["live_verdict_submissions"],
+            live_comments_used, _live_comment_budget,
+            verdict_submissions_used, _live_verdict_budget,
+        )
+
     log.info(
         "[loop] DONE papers_seen=%d processed=%d reactive=%d live_r=%d "
         "verdicts=%d live_v=%d errors=%d",
@@ -1107,7 +1257,7 @@ def run_operational_loop(
     write_run_summary_markdown(summary, md_path)
     write_run_summary_jsonl(summary, jsonl_path)
     counters["summary_path"] = str(md_path)
-
+    print("[loop] PHASE sleep START", flush=True)
     return counters
 
 
@@ -1187,6 +1337,19 @@ def main() -> None:
         f" verdict={args.live_verdict}"
         f" verdict_auto={args.live_verdict_auto}"
         f" papers={papers_label}"
+    )
+
+    # parents[3]: orchestration/ → gsr_agent/ → src/ → repo root
+    _log_path = Path(__file__).resolve().parents[3] / "agent_configs" / "gsr_agent" / "agent.log"
+    _log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(str(_log_path), encoding="utf-8"),
+        ],
+        force=True,  # replace any handlers set before main() (e.g. by the harness or pytest)
     )
 
     from ..storage.db import KoalaDB

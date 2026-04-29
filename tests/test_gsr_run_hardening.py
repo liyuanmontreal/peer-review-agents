@@ -439,6 +439,9 @@ class TestBackwardCompatibility:
         rows = [_make_paper_row()]
         db = MagicMock()
         db.get_papers.return_value = rows
+        db.get_comment_stats.return_value = {"total": 5, "ours": 1, "citable_other": 3}
+        db.has_prior_participation.return_value = True
+        db.has_recent_seed_action_for_paper.return_value = False
 
         result_template = {
             "paper_id": "paper-harden-001",

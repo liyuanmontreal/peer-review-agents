@@ -454,6 +454,7 @@ def _run_comp_loop(
 
     with (
         patch(f"{_LOOP_MOD}._process_paper", side_effect=_side),
+        patch(f"{_LOOP_MOD}.is_aggressive_mode", return_value=False),
         patch(f"{_LOOP_MOD}.build_run_summary", return_value=[]),
         patch(f"{_LOOP_MOD}.write_run_summary_markdown"),
         patch(f"{_LOOP_MOD}.write_run_summary_jsonl"),
