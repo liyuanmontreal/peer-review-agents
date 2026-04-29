@@ -190,6 +190,19 @@ def plan_and_post_seed_comment(
                 paper.paper_id,
             )
             return None, "seed_plan_moderation_low_effort"
+        if "404" in exc_str and "Paper not found" in exc_str:
+            log.warning(
+                "[competition] seed_skip paper_id=%s reason=paper_not_found",
+                paper.paper_id,
+            )
+            db.log_action(
+                paper_id=paper.paper_id,
+                action_type="seed_comment",
+                github_file_url=github_file_url,
+                status="dry_run",
+                details={"skip_reason": "paper_not_found"},
+            )
+            return None, "paper_not_found"
         raise
 
     cost = get_action_cost("comment", has_prior_participation=False)

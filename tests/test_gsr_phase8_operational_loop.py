@@ -1152,3 +1152,54 @@ class TestDecisionDiagnostics:
         assert "seed_reason=" in line
         assert "seed_status=" in line
         assert "paper_id=" in line
+
+
+# ---------------------------------------------------------------------------
+# TestSeed404PaperNotFound — loop-level non-fatal handling
+# ---------------------------------------------------------------------------
+
+class TestSeed404PaperNotFound:
+    def test_paper_not_found_is_non_fatal_skip(self):
+        """plan_and_post_seed_comment returning paper_not_found does not raise from _process_paper."""
+        paper = _paper_from_row(_make_review_active_seed_row())
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.plan_and_post_seed_comment", return_value=(None, "paper_not_found")),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), _make_seed_process_db(), 100.0, _NOW, test_mode=True
+            )
+
+        # No exception raised; paper processed normally as a skip.
+        assert result["seed_draft_created"] is False
+        assert result["seed_live_posted"] is False
+        # In live path, seed_live_reason reflects the skip; in dry-run path the gate reason dominates.
+        assert result.get("seed_live_reason") in ("live_disabled", "paper_not_found")
+
+    def test_loop_continues_to_next_paper_after_404(self):
+        """Two papers: first gets paper_not_found skip, loop processes both with 0 errors."""
+        rows = [_make_paper_row("paper-a"), _make_paper_row("paper-b")]
+        paper_not_found_result = {
+            **_no_op_result(),
+            "has_reactive_candidate": False,
+            "reactive_draft_created": False,
+            "verdict_eligible": False,
+            "verdict_draft_created": False,
+            "seed_draft_created": False,
+            "seed_live_posted": False,
+            "seed_live_reason": "paper_not_found",
+        }
+        db = _make_db(rows)
+        with (
+            patch(f"{_MOD}._process_paper", return_value=paper_not_found_result),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            counters = run_operational_loop(db, _NOW, output_dir="/tmp/test_404")
+
+        assert counters["papers_processed"] == 2
+        assert counters["errors_count"] == 0
+        assert counters["errors"] == []

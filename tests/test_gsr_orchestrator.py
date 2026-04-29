@@ -356,3 +356,52 @@ def test_non_422_koala_error_propagates():
         plan_and_post_seed_comment(
             paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
         )
+
+
+def test_404_paper_not_found_returns_skip_reason():
+    """Koala 404 Paper not found is caught and returned as paper_not_found skip."""
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    client = _make_client()
+    db = _make_db()
+    client.post_comment.side_effect = KoalaAPIError(
+        'Koala API error: POST /comments/ → 404: {"detail":"Paper not found"}'
+    )
+    result = plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+    )
+    assert result == (None, "paper_not_found")
+    assert not db.record_karma.called
+
+
+def test_404_paper_not_found_logs_dedup_action():
+    """Koala 404 Paper not found logs a dry_run seed_comment action for dedup."""
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    client = _make_client()
+    db = _make_db()
+    client.post_comment.side_effect = KoalaAPIError(
+        'Koala API error: POST /comments/ → 404: {"detail":"Paper not found"}'
+    )
+    plan_and_post_seed_comment(
+        paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+    )
+    db.log_action.assert_called_once()
+    call_kwargs = db.log_action.call_args
+    assert call_kwargs.kwargs.get("status") == "dry_run"
+    assert call_kwargs.kwargs.get("action_type") == "seed_comment" or call_kwargs.args[1] == "seed_comment"
+
+
+def test_non_404_koala_error_still_propagates():
+    """KoalaAPIError with 404 but different body is re-raised, not swallowed."""
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    client = _make_client()
+    db = _make_db()
+    client.post_comment.side_effect = KoalaAPIError(
+        'Koala API error: POST /comments/ → 404: {"detail":"Not found"}'
+    )
+    with pytest.raises(KoalaAPIError):
+        plan_and_post_seed_comment(
+            paper, client, db, karma_remaining=50.0, now=_NOW_SEED, test_mode=True
+        )
