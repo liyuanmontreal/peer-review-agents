@@ -77,6 +77,8 @@ def evaluate_verdict_eligibility(
     paper: "Paper",
     db: "KoalaDB",
     reactive_results: List[ReactiveAnalysisResult],
+    *,
+    aggressive: bool = False,
 ) -> VerdictEligibilityResult:
     """Gate 1: heat-band + strong reactive signal eligibility check.
 
@@ -84,6 +86,9 @@ def evaluate_verdict_eligibility(
         paper:            the paper to evaluate
         db:               local SQLite state store (provides citable_other count)
         reactive_results: Phase 5A analysis results for the paper
+        aggressive:       when True, bypasses the saturated-band veto so that
+                          high-comment papers remain verdict-eligible in the
+                          final-24h window (KOALA_AGGRESSIVE_FINAL_24H=1).
 
     Returns:
         VerdictEligibilityResult with eligible flag, reason code, and
@@ -102,19 +107,25 @@ def evaluate_verdict_eligibility(
     strong_signal = strongest_conf is not None and strongest_conf >= _STRONG_SIGNAL_THRESHOLD
 
     if band == "saturated":
-        return VerdictEligibilityResult(
-            eligible=False,
-            reason_code="saturated_low_value_v0",
-            heat_band=band,
-            distinct_citable_other_agents=n,
-            strongest_contradiction_confidence=strongest_conf,
-            selected_candidates=[],
+        if not aggressive:
+            return VerdictEligibilityResult(
+                eligible=False,
+                reason_code="saturated_low_value_v0",
+                heat_band=band,
+                distinct_citable_other_agents=n,
+                strongest_contradiction_confidence=strongest_conf,
+                selected_candidates=[],
+            )
+        log.info(
+            "[aggressive_mode] saturated_veto_bypassed paper_id=%s citable_other=%d",
+            paper.paper_id, n,
         )
 
     # Endgame: attempt verdicts for all non-saturated papers regardless of
     # contradiction signal strength. Gate 2 (MIN_DISTINCT_OTHER_AGENTS) enforces
     # the social-proof requirement; conservative scores (5.0) are used when
     # evidence is weak rather than skipping the opportunity entirely.
+    # In aggressive mode, saturated papers fall through here too.
     return VerdictEligibilityResult(
         eligible=True,
         reason_code="eligible",
@@ -263,6 +274,7 @@ def plan_verdict_for_paper(
     now: datetime,
     *,
     test_mode: bool = False,
+    aggressive: bool = False,
 ) -> dict:
     """Evaluate eligibility, build a verdict draft artifact, and persist it.
 
@@ -294,7 +306,7 @@ def plan_verdict_for_paper(
     """
     log.info("[verdict] START paper=%s", paper.paper_id)
 
-    eligibility = evaluate_verdict_eligibility(paper, db, reactive_results)
+    eligibility = evaluate_verdict_eligibility(paper, db, reactive_results, aggressive=aggressive)
 
     if not eligibility.eligible:
         log.info(

@@ -63,8 +63,13 @@ def sync_paper_comments(
     for comment in comments:
         if our_id and comment.author_agent_id == our_id:
             comment.is_ours = True
+        comment.is_citable = not comment.is_ours and bool(comment.author_agent_id)
         db.upsert_comment(comment)
-    log.debug("[sync_paper_comments] synced %d comments for paper=%s", len(comments), paper_id)
+    citable_count = sum(1 for c in comments if c.is_citable)
+    log.info(
+        "[competition] synced_comments paper_id=%s count=%d citable_other=%d",
+        paper_id, len(comments), citable_count,
+    )
     return len(comments)
 
 

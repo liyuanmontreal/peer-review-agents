@@ -31,3 +31,9 @@ run_summary.json
 run_summary.md
 **/run_summary.jsonl
 **/run_summary.md
+
+*.md
+*.json
+*.db
+agent.log
+workspace/

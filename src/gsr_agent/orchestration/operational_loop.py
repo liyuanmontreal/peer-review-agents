@@ -55,7 +55,7 @@ from ..artifacts.github import (
     validate_artifact_for_live_action,
 )
 from ..commenting.orchestrator import plan_and_post_reactive_comment, plan_and_post_seed_comment
-from ..koala.errors import KoalaWindowClosedError
+from ..koala.errors import KoalaPreflightError, KoalaWindowClosedError
 from ..commenting.reactive_analysis import (
     analyze_reactive_candidates_for_paper,
     select_best_reactive_candidate_for_paper,
@@ -116,7 +116,7 @@ def _reactive_max_conf(candidate: Any) -> float:
 
 # Endgame live-action budgets per loop run.
 _LIVE_COMMENT_BUDGET: int = 3   # max live reactive/seed posts per loop
-_LIVE_VERDICT_BUDGET: int = 2   # max live verdict submissions per loop
+_LIVE_VERDICT_BUDGET: int = 1   # max live verdict submissions per loop (normal mode)
 
 
 def run_preflight_checks(
@@ -134,6 +134,9 @@ def run_preflight_checks(
     set — KOALA_RUN_MODE, KOALA_API_TOKEN, and GitHub publish configuration.
     For live_verdict, also requires explicit paper_ids. live_verdict_auto does
     not require paper_ids (candidate selection is automatic).
+
+    In KOALA_AGGRESSIVE_FINAL_24H mode, --live-verdict without --paper-id is
+    allowed when --live-verdict-auto is also set; the loop scans all papers.
 
     Returns:
         (ok, failures) — ok is True when no failures; failures is a list of
@@ -166,7 +169,10 @@ def run_preflight_checks(
             )
 
     if live_verdict and paper_ids is None:
-        failures.append("--live-verdict requires explicit --paper-id; no allowlist provided")
+        if live_verdict_auto and is_aggressive_mode():
+            log.info("[aggressive_mode] verdict_allowlist_bypassed reason=final_24h_auto")
+        else:
+            failures.append("--live-verdict requires explicit --paper-id; no allowlist provided")
 
     return len(failures) == 0, failures
 
@@ -313,6 +319,74 @@ def _submit_live_verdict(
     return True, "live_submitted"
 
 
+def _check_reactive_dedup(
+    db: "KoalaDB",
+    paper_id: str,
+    comment_id: str,
+    now: datetime,
+    *,
+    aggressive_mode: bool,
+) -> bool:
+    """Return True if the reactive dedup gate blocks action for this comment.
+
+    In AGGRESSIVE_FINAL_24H mode, only a prior live post (status=success) blocks.
+    A dry-run action is logged as ignored but does not block.
+    In normal mode, both dry_run and success block (existing behaviour).
+    """
+    if aggressive_mode:
+        if db.has_recent_reactive_action_for_comment(
+            paper_id, comment_id, now, statuses=("success",)
+        ):
+            log.info(
+                "[dedup] blocked_live_success paper_id=%s action_type=reactive_comment status=success",
+                paper_id,
+            )
+            return True
+        if db.has_recent_reactive_action_for_comment(
+            paper_id, comment_id, now, statuses=("dry_run",)
+        ):
+            log.info(
+                "[dedup] ignored_non_live_action paper_id=%s action_type=reactive_comment status=dry_run",
+                paper_id,
+            )
+        return False
+    return db.has_recent_reactive_action_for_comment(paper_id, comment_id, now)
+
+
+def _check_verdict_dedup(
+    db: "KoalaDB",
+    paper_id: str,
+    now: datetime,
+    *,
+    aggressive_mode: bool,
+) -> bool:
+    """Return True if the verdict dedup gate blocks action for this paper.
+
+    In AGGRESSIVE_FINAL_24H mode, only a prior live verdict submission
+    (action_type=verdict_submission, status=success) blocks.  A verdict_draft
+    dry-run is logged as ignored but does not block.
+    In normal mode, any verdict_draft (dry_run or success) blocks.
+    """
+    if aggressive_mode:
+        if db.has_recent_verdict_action_for_paper(
+            paper_id, now, statuses=("success",), action_type="verdict_submission"
+        ):
+            log.info(
+                "[dedup] blocked_live_success paper_id=%s action_type=verdict_submission status=success",
+                paper_id,
+            )
+            return True
+        if db.has_recent_verdict_action_for_paper(
+            paper_id, now, statuses=("dry_run",), action_type="verdict_draft"
+        ):
+            log.info(
+                "[dedup] ignored_non_live_action paper_id=%s action_type=verdict_draft status=dry_run",
+                paper_id,
+            )
+        return False
+    return db.has_recent_verdict_action_for_paper(paper_id, now)
+
+
 def _process_paper(
     paper: Paper,
     client: _DryRunClient,
@@ -389,26 +463,39 @@ def _process_paper(
             "window_skipped": True,
         }
 
-    reactive_results = analyze_reactive_candidates_for_paper(paper.paper_id, db)
-    candidate = select_best_reactive_candidate_for_paper(paper.paper_id, reactive_results, db)
+    reactive_results = analyze_reactive_candidates_for_paper(
+        paper.paper_id, db, aggressive_mode=aggressive_mode
+    )
+    candidate = select_best_reactive_candidate_for_paper(
+        paper.paper_id, reactive_results, db, aggressive_mode=aggressive_mode
+    )
 
-    # Aggressive mode: if we already commented and are not yet in verdict window, require
-    # a strong contradiction signal to post a follow-up (broad coverage > deep engagement).
-    if (
-        aggressive_mode
-        and candidate is not None
-        and _stats_for_log.get("ours", 0) >= 1
-        and not verdict_phase_ok
-        and _reactive_max_conf(candidate) < AGGRESSIVE_REPEAT_STRONG_SIGNAL
-    ):
-        log.info(
-            "[aggressive_mode] comment_path=skipped paper_id=%s "
-            "reason=repeat_depth_suppressed ours=%d conf=%.2f",
-            paper.paper_id,
-            _stats_for_log.get("ours", 0),
-            _reactive_max_conf(candidate),
-        )
-        candidate = None
+    if aggressive_mode:
+        # In aggressive mode: select immediately if any decision=post candidate exists.
+        # The heat-band suppression gate is bypassed — immediate posting is preferred.
+        _post_decision_candidates = [
+            r for r in reactive_results
+            if r.recommendation in ("react", "evidence_sparse")
+        ]
+        # Heat band may have suppressed the candidate; re-select from decision=post results.
+        if candidate is None and _post_decision_candidates:
+            _react_only = [r for r in _post_decision_candidates if r.recommendation == "react"]
+            candidate = (
+                max(_react_only, key=_reactive_max_conf)
+                if _react_only
+                else _post_decision_candidates[0]
+            )
+        if candidate is not None:
+            log.info(
+                "[reactive_selection] paper_id=%s selected_comment_id=%s reason=%s",
+                paper.paper_id, candidate.comment_id, candidate.recommendation,
+            )
+        elif _post_decision_candidates:
+            log.info(
+                "[reactive_selection] paper_id=%s decision=skip "
+                "reason=selection_empty_after_post_decisions",
+                paper.paper_id,
+            )
 
     reactive_status = "none"
     reactive_reason: Optional[str] = None
@@ -418,10 +505,21 @@ def _process_paper(
 
     if candidate is None:
         reactive_live_reason = "no_candidate"
-    elif db.has_recent_reactive_action_for_comment(paper.paper_id, candidate.comment_id, now):
+        log.info(
+            "[comment_decision] paper_id=%s path=reactive_short decision=skip reason=no_candidate",
+            paper.paper_id,
+        )
+    elif _check_reactive_dedup(
+        db, paper.paper_id, candidate.comment_id, now, aggressive_mode=aggressive_mode
+    ):
         reactive_status = "dedup_skipped"
         reactive_reason = "recent_reactive_action"
         reactive_live_reason = "dedup_skipped"
+        log.info(
+            "[comment_decision] paper_id=%s path=reactive_short decision=skip reason=dedup "
+            "source_comment=%s",
+            paper.paper_id, candidate.comment_id,
+        )
     else:
         if aggressive_mode:
             log.info(
@@ -451,6 +549,15 @@ def _process_paper(
         elif not comment_phase_ok:
             reactive_live_reason = "window_skip"
 
+        log.info(
+            "[comment_decision] paper_id=%s path=reactive_short decision=%s "
+            "reason=%s recommendation=%s",
+            paper.paper_id,
+            "post" if live_allowed else "dry_run",
+            reactive_live_reason or "live_allowed",
+            candidate.recommendation,
+        )
+
         if live_allowed:
             try:
                 comment_id = plan_and_post_reactive_comment(
@@ -463,12 +570,25 @@ def _process_paper(
                 comment_id = None
                 reactive_live_reason = "window_closed"
                 reactive_status = "window_skip"
+            except KoalaPreflightError as _pfe:
+                log.warning(
+                    "[comment_live_post] FAIL paper_id=%s source_comment_id=%s "
+                    "error_type=KoalaPreflightError error=%s",
+                    paper.paper_id, candidate.comment_id, _pfe,
+                )
+                comment_id = None
+                reactive_live_reason = "preflight_failed"
+                reactive_status = "skipped"
             if comment_id is not None:
                 reactive_status = "live_posted"
                 reactive_artifact = comment_id
                 reactive_live_posted = True
                 reactive_live_reason = "live_posted"
-            elif reactive_live_reason != "window_closed":
+            elif reactive_live_reason not in ("window_closed", "preflight_failed"):
+                log.warning(
+                    "[comment_live_post] SKIP paper_id=%s source_comment_id=%s reason=plan_returned_none",
+                    paper.paper_id, candidate.comment_id,
+                )
                 reactive_live_reason = "live_gate_failed"
                 reactive_status = "skipped"
         else:
@@ -520,11 +640,19 @@ def _process_paper(
         _has_seed_candidate_log = (_opp == PaperOpportunity.SEED)
         if _opp != PaperOpportunity.SEED:
             seed_live_reason = "no_candidate"
+            log.info(
+                "[comment_decision] paper_id=%s path=paper_short decision=skip reason=not_seed_opportunity",
+                paper.paper_id,
+            )
         elif db.has_recent_seed_action_for_paper(paper.paper_id, now):
             _recent_seed_log = True
             seed_live_reason = "recent_action"
             log.info(
                 "[competition] seed_skipped paper_id=%s reason=recent_action",
+                paper.paper_id,
+            )
+            log.info(
+                "[comment_decision] paper_id=%s path=paper_short decision=skip reason=recent_action",
                 paper.paper_id,
             )
         else:
@@ -554,6 +682,13 @@ def _process_paper(
                 seed_live_reason = "seed_gate_no_client"
             elif not seed_window_ok and not aggressive_seed_ok:
                 seed_live_reason = "seed_gate_window"
+
+            log.info(
+                "[comment_decision] paper_id=%s path=paper_short decision=%s reason=%s",
+                paper.paper_id,
+                "post" if live_seed_allowed else "dry_run",
+                seed_live_reason or "live_allowed",
+            )
 
             if live_seed_allowed:
                 _seed_id, _skip_reason = None, None
@@ -594,7 +729,7 @@ def _process_paper(
     # Verdict path — dry-run by default; live only when all gates pass.
     # submit_verdict is never called unless live_verdict_allowed is True.
     # ---------------------------------------------------------------------------
-    eligibility = evaluate_verdict_eligibility(paper, db, reactive_results)
+    eligibility = evaluate_verdict_eligibility(paper, db, reactive_results, aggressive=aggressive_mode)
     if aggressive_mode:
         log.info(
             "[aggressive_mode] verdict_path=lightweight paper_id=%s eligible=%s citable_other=%d",
@@ -608,13 +743,13 @@ def _process_paper(
 
     if not eligibility.eligible:
         verdict_live_reason = "no_eligible_verdict"
-    elif db.has_recent_verdict_action_for_paper(paper.paper_id, now):
+    elif _check_verdict_dedup(db, paper.paper_id, now, aggressive_mode=aggressive_mode):
         verdict_status = "dedup_skipped"
         verdict_reason = "recent_verdict_action"
         verdict_live_reason = "dedup_skipped"
     else:
         verdict_result = plan_verdict_for_paper(
-            paper, db, reactive_results, now, test_mode=test_mode
+            paper, db, reactive_results, now, test_mode=test_mode, aggressive=aggressive_mode
         )
         verdict_artifact = verdict_result.get("artifact_url")
         verdict_status = "dry_run" if verdict_artifact else "skipped"
@@ -786,9 +921,12 @@ def run_operational_loop(
         test_mode:         if True (default), use stub client; always dry-run
         live_reactive:     if True, allow at most one live reactive post per run
                            (requires KOALA_RUN_MODE=live and test_mode=False)
-        live_verdict:      if True, allow at most one live verdict submission per run
-                           (requires KOALA_RUN_MODE=live, test_mode=False, and explicit
-                           paper_ids as allowlist; more conservative than live_reactive)
+        live_verdict:      if True, allow live verdict submissions per run. Safety
+                           permission required for all live verdict writes. Normal mode
+                           cap: 1. Aggressive mode (KOALA_AGGRESSIVE_FINAL_24H=1) with
+                           --live-verdict-auto raises the cap to AGGRESSIVE_LIVE_VERDICT_BUDGET
+                           (currently 15). Requires KOALA_RUN_MODE=live, test_mode=False,
+                           and explicit paper_ids as allowlist.
         live_verdict_auto: if True, automatically select and submit at most one verdict
                            per run without requiring explicit paper_ids. Candidate must
                            be in deliberating phase with prior own comment and ≥3 distinct
@@ -810,6 +948,8 @@ def run_operational_loop(
     if _aggressive:
         log.info("[aggressive_mode] ENABLED budgets: comment=%d verdict=%d candidates=%d",
                  _live_comment_budget, _live_verdict_budget, _candidate_budget)
+        if live_verdict:
+            log.info("[aggressive_mode] verdict_live_budget=%d", _live_verdict_budget)
 
     client = _DryRunClient()
 
@@ -825,6 +965,7 @@ def run_operational_loop(
 
     # Allowlist gate for verdict live: explicit paper_ids required.
     allowlisted = paper_ids is not None
+    _aggressive_allowlist_bypass = _aggressive and live_verdict_auto
 
     print("[loop] PHASE load_state DONE", flush=True)
     _db_t0 = time.monotonic()
@@ -1012,17 +1153,12 @@ def run_operational_loop(
                 _tier = 0 if _citable >= 2 else 1
                 return (_base, _tier, -_citable)
             if _o == PaperOpportunity.SEED:
-                _n = _s.get("total", 0)
-                if _n > SATURATED_COMMENT_THRESHOLD:
-                    return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
-                # Priority C: 2–4 citable others = prime verdict-funnel target.
-                if 2 <= _citable <= 4:
+                # Priority B: >=3 citable others = verdict-eligible targets (can cite for verdict).
+                if _citable >= 3:
                     return (_base, 0, -_citable)
-                if _citable > 4:
+                if 1 <= _citable < 3:
                     return (_base, 1, -_citable)
-                if _citable == 1:
-                    return (_base, 2, 0)
-                return (_base, 3, 0)  # cold
+                return (_base, 2, 0)  # cold
             return (OPPORTUNITY_PRIORITY[PaperOpportunity.SKIP], 0, 0)
         if _o == PaperOpportunity.SEED:
             _n = _s.get("total", 0)
@@ -1051,11 +1187,18 @@ def run_operational_loop(
         _n = _s.get("total", 0)
         if _o == PaperOpportunity.SEED:
             if _n > SATURATED_COMMENT_THRESHOLD:
-                log.info(
-                    "[competition] saturated_comments paper_id=%s comment_count=%d",
-                    _p.paper_id, _n,
-                )
-                continue
+                if _aggressive:
+                    _citable_log = _s.get("citable_other", 0)
+                    log.info(
+                        "[aggressive_mode] saturation_disabled paper_id=%s comment_count=%d citable_other=%d",
+                        _p.paper_id, _n, _citable_log,
+                    )
+                else:
+                    log.info(
+                        "[competition] saturated_comments paper_id=%s comment_count=%d",
+                        _p.paper_id, _n,
+                    )
+                    continue
             if _n == 0:
                 _abstract = (_p.abstract or "").strip()
                 if (
@@ -1109,7 +1252,9 @@ def run_operational_loop(
             verdict_live_budget_remaining = max(0, _live_verdict_budget - verdict_submissions_used)
             _is_auto_candidate = live_verdict_auto and paper_id == _auto_verdict_paper_id
             _paper_live_verdict = live_verdict or _is_auto_candidate
-            _paper_allowlisted = allowlisted or _is_auto_candidate
+            _paper_allowlisted = allowlisted or _is_auto_candidate or _aggressive_allowlist_bypass
+            if _aggressive_allowlist_bypass and not allowlisted and not _is_auto_candidate:
+                log.info("[aggressive_mode] verdict_allowlist_bypassed_runtime paper_id=%s", paper_id)
             result = _process_paper(
                 paper, client, db, karma_remaining, now, test_mode,
                 opportunity=_opp_by_id.get(paper_id),
@@ -1300,7 +1445,10 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "Allow at most one live verdict submission per run. "
+            "Allow live verdict submissions per run (required safety permission for all "
+            "live verdict writes). Normal mode: at most one submission. "
+            "AGGRESSIVE_FINAL_24H mode with --live-verdict-auto: up to "
+            f"{AGGRESSIVE_LIVE_VERDICT_BUDGET} submissions. "
             "Requires KOALA_RUN_MODE=live, test_mode=False, and --paper-id (allowlist)."
         ),
     )

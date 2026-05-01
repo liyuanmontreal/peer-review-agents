@@ -710,3 +710,71 @@ class TestPlanVerdictForPaper:
         result = plan_verdict_for_paper(paper, db, [_make_react_result(confidence=0.40)], _NOW)
         assert result["status"] == "dry_run"
         assert result["heat_band"] == "goldilocks"
+
+
+# ---------------------------------------------------------------------------
+# E. Aggressive-mode overrides (KOALA_AGGRESSIVE_FINAL_24H=1)
+# ---------------------------------------------------------------------------
+
+class TestAggressiveModeVerdictEligibility:
+    """In aggressive mode, the saturated-band veto must not block verdicts."""
+
+    def test_saturated_normal_mode_is_ineligible(self):
+        """Normal mode: saturated (15+) is always ineligible — baseline unchanged."""
+        paper = _make_paper()
+        db = _make_db(citable_other=15)
+        result = evaluate_verdict_eligibility(paper, db, [_make_react_result(confidence=0.90)])
+        assert result.eligible is False
+        assert result.reason_code == "saturated_low_value_v0"
+
+    def test_saturated_aggressive_mode_is_eligible(self):
+        """Aggressive mode: saturated paper with sufficient citations passes Gate 1."""
+        paper = _make_paper()
+        db = _make_db(citable_other=15)
+        result = evaluate_verdict_eligibility(
+            paper, db, [_make_react_result(confidence=0.90)], aggressive=True
+        )
+        assert result.eligible is True
+        assert result.reason_code == "eligible"
+        assert result.heat_band == "saturated"
+
+    def test_saturated_aggressive_no_reactive_still_eligible(self):
+        """Aggressive mode: saturated paper with no reactive signal still passes Gate 1."""
+        paper = _make_paper()
+        db = _make_db(citable_other=20)
+        result = evaluate_verdict_eligibility(paper, db, [], aggressive=True)
+        assert result.eligible is True
+        assert result.heat_band == "saturated"
+
+    def test_plan_verdict_saturated_aggressive_produces_dry_run(self):
+        """Aggressive mode: plan_verdict_for_paper on saturated paper produces dry_run artifact."""
+        paper = _make_paper()
+        db = _make_db(citable_other=15)  # 15 distinct agents in DB, satisfies Gate 2
+        result = plan_verdict_for_paper(
+            paper, db, [_make_react_result(confidence=0.90)], _NOW, aggressive=True
+        )
+        assert result["status"] == "dry_run"
+        assert result["eligible"] is True
+        assert result["artifact_url"] is not None
+        assert result["heat_band"] == "saturated"
+
+    def test_plan_verdict_saturated_aggressive_insufficient_citations_skips(self):
+        """Aggressive mode: Gate 1 passes for saturated but Gate 2 fails (<3 distinct agents)."""
+        paper = _make_paper()
+        db = _make_db(citable_other=15, distinct_agents=2)
+        result = plan_verdict_for_paper(
+            paper, db, [_make_react_result(confidence=0.90)], _NOW, aggressive=True
+        )
+        assert result["status"] == "skipped"
+        assert result["reason_code"] == "insufficient_distinct_other_agent_citations"
+        assert result["artifact_url"] is None
+
+    def test_plan_verdict_normal_mode_saturated_still_skips(self):
+        """Normal mode: saturated paper must still be rejected (no regression)."""
+        paper = _make_paper()
+        db = _make_db(citable_other=15)
+        result = plan_verdict_for_paper(
+            paper, db, [_make_react_result(confidence=0.90)], _NOW, aggressive=False
+        )
+        assert result["status"] == "skipped"
+        assert result["reason_code"] == "saturated_low_value_v0"

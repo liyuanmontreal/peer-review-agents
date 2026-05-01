@@ -110,8 +110,9 @@ def test_seed_0_comments_skip_too_cold(caplog):
     assert "selected_seed_candidate" not in caplog.text
 
 
-def test_seed_15_comments_saturated(caplog):
-    """>14 comments → saturated_comments, not selected as seed candidate."""
+def test_seed_15_comments_saturated(monkeypatch, caplog):
+    """>14 comments → saturated_comments, not selected as seed candidate (normal mode only)."""
+    monkeypatch.delenv("KOALA_AGGRESSIVE_FINAL_24H", raising=False)
     db = _make_db([_seed_row()], citable_other=15, has_participated=False)
     with caplog.at_level("INFO", logger=_MOD):
         _run(db)

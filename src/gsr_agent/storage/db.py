@@ -534,22 +534,27 @@ class KoalaDB:
         *,
         within_hours: float = 12.0,
         statuses: tuple = ("dry_run", "success"),
+        action_type: str = "verdict_draft",
     ) -> bool:
-        """Return True if a verdict_draft action already exists for this paper recently.
+        """Return True if a verdict action already exists for this paper recently.
 
-        Matches rows where action was logged within within_hours of now and status
-        is in statuses. Both dry_run and success are treated as "already acted".
+        Matches rows where action_type matches, action was logged within within_hours
+        of now, and status is in statuses. Both dry_run and success are treated as
+        "already acted" by default.
+
+        Pass action_type="verdict_submission" with statuses=("success",) to check
+        only for confirmed live submissions (used in AGGRESSIVE_FINAL_24H mode).
         """
         cutoff = (now - timedelta(hours=within_hours)).astimezone(timezone.utc).isoformat()
         placeholders = ",".join("?" * len(statuses))
         row = self._conn.execute(
             f"""SELECT 1 FROM koala_agent_actions
                 WHERE paper_id=?
-                  AND action_type='verdict_draft'
+                  AND action_type=?
                   AND status IN ({placeholders})
                   AND created_at >= ?
                 LIMIT 1""",
-            (paper_id, *statuses, cutoff),
+            (paper_id, action_type, *statuses, cutoff),
         ).fetchone()
         return row is not None
 

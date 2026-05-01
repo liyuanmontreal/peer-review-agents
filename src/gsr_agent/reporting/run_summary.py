@@ -24,6 +24,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from ..rules.timeline import get_micro_phase, get_paper_phase
 from ..rules.verdict_eligibility import MIN_DISTINCT_OTHER_AGENTS
+from ..strategy.aggressive_mode import is_aggressive_mode
 from ..strategy.heat import paper_heat_band
 from ..strategy.opportunity_manager import PREFERRED_COMMENT_MIN, SATURATED_COMMENT_THRESHOLD
 
@@ -35,6 +36,10 @@ _STRONG_SIGNAL_THRESHOLD: float = 0.75
 _VALID_ACTIONS = frozenset({
     "consider_verdict_draft",
     "consider_reactive_comment",
+    "consider_seed_comment",
+    "seed_or_verdict_candidate",
+    "not_eligible_no_own_comment",
+    "not_eligible_window",
     "run_reactive_analysis",
     "skip_too_cold",
     "skip_too_crowded",
@@ -56,24 +61,36 @@ def _compute_verdict_eligibility(
     heat_band: str,
     strongest_conf: Optional[float],
     distinct_other_agents: int,
+    *,
+    aggressive: bool = False,
 ) -> tuple[bool, str]:
     """Mirror of verdict_assembly Gate 1 + Gate 2 using count-based inputs.
 
     Returns (eligible, reason_code) without requiring full reactive result objects.
+    In aggressive mode, saturated and crowded heat-band vetoes are bypassed so
+    that high-comment papers remain verdict-eligible in the final-24h window.
     """
     strong_signal = (
         strongest_conf is not None and strongest_conf >= _STRONG_SIGNAL_THRESHOLD
     )
 
     if heat_band == "saturated":
-        return False, "saturated_low_value_v0"
+        if not aggressive:
+            return False, "saturated_low_value_v0"
+        # Aggressive: bypass saturated veto; fall through to citation gate.
+        if distinct_other_agents < MIN_DISTINCT_OTHER_AGENTS:
+            return False, "insufficient_distinct_other_agent_citations"
+        return True, "eligible"
 
     if not strong_signal:
         if heat_band == "cold":
             return False, "cold_no_override"
         if heat_band == "crowded":
-            return False, "crowded_no_override"
-        return False, "no_react_signal"
+            if not aggressive:
+                return False, "crowded_no_override"
+            # Aggressive: bypass crowded veto; fall through to citation gate.
+        else:
+            return False, "no_react_signal"
 
     if distinct_other_agents < MIN_DISTINCT_OTHER_AGENTS:
         return False, "insufficient_distinct_other_agent_citations"
@@ -89,15 +106,20 @@ def _recommended_action(
     citable_other: int,
     comments_analyzed: int,
     total_comments: int = 0,
-    is_new_seed_window: bool = False,
+    is_seed_window: bool = False,
+    aggressive: bool = False,
+    has_own_comment: bool = False,
 ) -> str:
     """Return the recommended next action string for a paper.
 
     Priority order (highest to lowest):
-      consider_verdict_draft   — verdict gate passed; draft ready for review
+      consider_verdict_draft    — verdict gate passed; draft ready for review
       consider_reactive_comment — Phase 5A found a react candidate
-      consider_seed_comment     — NEW+SEED_WINDOW paper with social proof (1–12 comments)
-      skip_too_crowded          — saturated band, low marginal value
+      consider_seed_comment     — SEED_WINDOW paper with social proof (1–12 comments)
+      seed_or_verdict_candidate — aggressive mode: saturated paper with own comment + citations
+      not_eligible_no_own_comment — aggressive mode: saturated, no own comment yet
+      not_eligible_window       — aggressive mode: saturated, other eligibility gap
+      skip_too_crowded          — saturated band, low marginal value (normal mode)
       skip_too_cold             — cold band, no social proof
       run_reactive_analysis     — other comments exist but haven't been analysed
       skip_no_signal            — analysis done, no reactive signal found
@@ -107,9 +129,15 @@ def _recommended_action(
         return "consider_verdict_draft"
     if has_react_candidate:
         return "consider_reactive_comment"
-    if is_new_seed_window and PREFERRED_COMMENT_MIN <= total_comments <= SATURATED_COMMENT_THRESHOLD:
+    if is_seed_window and PREFERRED_COMMENT_MIN <= total_comments <= SATURATED_COMMENT_THRESHOLD:
         return "consider_seed_comment"
     if heat_band == "saturated":
+        if aggressive:
+            if has_own_comment and citable_other >= MIN_DISTINCT_OTHER_AGENTS:
+                return "seed_or_verdict_candidate"
+            if not has_own_comment:
+                return "not_eligible_no_own_comment"
+            return "not_eligible_window"
         return "skip_too_crowded"
     if heat_band == "cold":
         return "skip_too_cold"
@@ -145,8 +173,9 @@ def build_paper_summary(paper_row: dict, db: "KoalaDB", now: datetime) -> dict:
     strongest_conf = db.get_strongest_contradiction_confidence(paper_id)
     has_react_candidate = reactive["react_count"] > 0
 
+    _aggressive = is_aggressive_mode()
     verdict_eligible, verdict_reason_code = _compute_verdict_eligibility(
-        heat_band, strongest_conf, distinct_n
+        heat_band, strongest_conf, distinct_n, aggressive=_aggressive
     )
 
     latest_action = db.get_latest_action_for_paper(paper_id)
@@ -161,7 +190,9 @@ def build_paper_summary(paper_row: dict, db: "KoalaDB", now: datetime) -> dict:
         citable_other=stats["citable_other"],
         comments_analyzed=reactive["comments_analyzed"],
         total_comments=stats["total"],
-        is_new_seed_window=(phase == "NEW" and micro_phase == "SEED_WINDOW"),
+        is_seed_window=(micro_phase == "SEED_WINDOW"),
+        aggressive=_aggressive,
+        has_own_comment=stats["ours"] > 0,
     )
 
     return {
@@ -267,6 +298,18 @@ def write_run_summary_markdown(summary: List[dict], path: "str | Path") -> None:
             lines.append(
                 f"- Reactive live: posted={s['reactive_live_posted']},"
                 f" reason={live_reason}"
+            )
+        if "seed_live_posted" in s or "seed_draft_created" in s:
+            seed_posted = s.get("seed_live_posted", False)
+            seed_draft = s.get("seed_draft_created", False)
+            seed_reason = s.get("seed_live_reason") or (
+                "live_posted" if seed_posted
+                else "draft_created" if seed_draft
+                else "no_seed"
+            )
+            lines.append(
+                f"- Seed live: posted={seed_posted}, draft={seed_draft},"
+                f" reason={seed_reason}"
             )
         artifact = s["latest_artifact_url"] or "(none)"
         lines.append(f"- Latest artifact: {artifact}")

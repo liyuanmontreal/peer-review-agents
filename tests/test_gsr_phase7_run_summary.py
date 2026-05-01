@@ -214,8 +214,10 @@ class TestBuildPaperSummary:
 
 class TestRecommendedNextAction:
     def _summary(self, **kwargs) -> str:
+        from unittest.mock import patch
         db = _make_db(**kwargs)
-        return build_paper_summary(_make_paper_row(), db, _NOW)["recommended_next_action"]
+        with patch("gsr_agent.reporting.run_summary.is_aggressive_mode", return_value=False):
+            return build_paper_summary(_make_paper_row(), db, _NOW)["recommended_next_action"]
 
     def test_goldilocks_react_candidate_consider_reactive(self):
         action = self._summary(distinct_agents=2, react_count=1, strongest_conf=0.70, comments_analyzed=1)
@@ -543,3 +545,140 @@ class TestHeatBandInSummary:
         assert "Seed live:" in text
         assert "posted=True" in text
         assert "reason=live_posted" in text
+
+
+# ---------------------------------------------------------------------------
+# G. Aggressive-mode overrides (KOALA_AGGRESSIVE_FINAL_24H=1)
+# ---------------------------------------------------------------------------
+
+from gsr_agent.reporting.run_summary import _compute_verdict_eligibility, _recommended_action  # noqa: E402
+
+
+class TestAggressiveModeRunSummary:
+    """In aggressive mode, saturated/crowded papers must not be labelled skip_too_crowded
+    or show saturated_low_value_v0 / crowded_no_override as verdict reason."""
+
+    # --- _compute_verdict_eligibility ---
+
+    def test_saturated_normal_returns_saturated_low_value(self):
+        """Normal mode baseline: saturated → saturated_low_value_v0."""
+        eligible, code = _compute_verdict_eligibility("saturated", 0.90, 15, aggressive=False)
+        assert eligible is False
+        assert code == "saturated_low_value_v0"
+
+    def test_saturated_aggressive_sufficient_citations_eligible(self):
+        """Aggressive mode: saturated with >=3 distinct agents → eligible."""
+        eligible, code = _compute_verdict_eligibility("saturated", None, 15, aggressive=True)
+        assert eligible is True
+        assert code == "eligible"
+
+    def test_saturated_aggressive_insufficient_citations_not_eligible(self):
+        """Aggressive mode: saturated with <3 distinct agents → citation gate fails."""
+        eligible, code = _compute_verdict_eligibility("saturated", None, 2, aggressive=True)
+        assert eligible is False
+        assert code == "insufficient_distinct_other_agent_citations"
+
+    def test_crowded_no_signal_normal_returns_crowded_no_override(self):
+        """Normal mode baseline: crowded + no strong signal → crowded_no_override."""
+        eligible, code = _compute_verdict_eligibility("crowded", None, 12, aggressive=False)
+        assert eligible is False
+        assert code == "crowded_no_override"
+
+    def test_crowded_no_signal_aggressive_sufficient_citations_eligible(self):
+        """Aggressive mode: crowded + no strong signal + >=3 agents → eligible."""
+        eligible, code = _compute_verdict_eligibility("crowded", None, 12, aggressive=True)
+        assert eligible is True
+        assert code == "eligible"
+
+    def test_crowded_no_signal_aggressive_insufficient_citations_not_eligible(self):
+        """Aggressive mode: crowded + no strong signal + <3 agents → citation gate fails."""
+        eligible, code = _compute_verdict_eligibility("crowded", None, 1, aggressive=True)
+        assert eligible is False
+        assert code == "insufficient_distinct_other_agent_citations"
+
+    # --- _recommended_action for saturated papers ---
+
+    def test_saturated_normal_returns_skip_too_crowded(self):
+        """Normal mode baseline: saturated paper → skip_too_crowded."""
+        action = _recommended_action(
+            verdict_eligible=False,
+            has_react_candidate=False,
+            heat_band="saturated",
+            citable_other=15,
+            comments_analyzed=1,
+            aggressive=False,
+        )
+        assert action == "skip_too_crowded"
+
+    def test_saturated_aggressive_with_own_comment_and_citations_seed_or_verdict(self):
+        """Aggressive mode: saturated + own comment + citable>=3 → seed_or_verdict_candidate."""
+        action = _recommended_action(
+            verdict_eligible=False,
+            has_react_candidate=False,
+            heat_band="saturated",
+            citable_other=15,
+            comments_analyzed=1,
+            aggressive=True,
+            has_own_comment=True,
+        )
+        assert action == "seed_or_verdict_candidate"
+
+    def test_saturated_aggressive_no_own_comment_not_eligible(self):
+        """Aggressive mode: saturated + no own comment → not_eligible_no_own_comment."""
+        action = _recommended_action(
+            verdict_eligible=False,
+            has_react_candidate=False,
+            heat_band="saturated",
+            citable_other=15,
+            comments_analyzed=1,
+            aggressive=True,
+            has_own_comment=False,
+        )
+        assert action == "not_eligible_no_own_comment"
+
+    def test_saturated_aggressive_not_enough_citations_not_eligible_window(self):
+        """Aggressive mode: saturated + own comment but <3 citable → not_eligible_window."""
+        action = _recommended_action(
+            verdict_eligible=False,
+            has_react_candidate=False,
+            heat_band="saturated",
+            citable_other=2,
+            comments_analyzed=1,
+            aggressive=True,
+            has_own_comment=True,
+        )
+        assert action == "not_eligible_window"
+
+    # --- build_paper_summary end-to-end with env override ---
+
+    def test_saturated_paper_normal_mode_skip_too_crowded(self):
+        """Normal mode: high-comment paper → recommended_action=skip_too_crowded."""
+        from unittest.mock import patch
+        row = _make_paper_row()
+        db = _make_db(distinct_agents=15, citable_other=15, react_count=0, strongest_conf=None)
+        with patch("gsr_agent.reporting.run_summary.is_aggressive_mode", return_value=False):
+            s = build_paper_summary(row, db, _NOW)
+        assert s["recommended_next_action"] == "skip_too_crowded"
+        assert s["verdict_eligibility"]["reason_code"] == "saturated_low_value_v0"
+
+    def test_saturated_paper_aggressive_mode_not_skip_too_crowded(self):
+        """Aggressive mode: saturated paper with 15 distinct agents → verdict eligible,
+        recommended action is consider_verdict_draft (not skip_too_crowded)."""
+        from unittest.mock import patch
+        row = _make_paper_row()
+        db = _make_db(distinct_agents=15, citable_other=15, react_count=0, strongest_conf=None)
+        with patch("gsr_agent.reporting.run_summary.is_aggressive_mode", return_value=True):
+            s = build_paper_summary(row, db, _NOW)
+        assert s["recommended_next_action"] != "skip_too_crowded"
+        assert s["recommended_next_action"] == "consider_verdict_draft"
+        assert s["verdict_eligibility"]["eligible"] is True
+
+    def test_saturated_paper_aggressive_mode_verdict_eligible_shows_consider_verdict(self):
+        """Aggressive mode: saturated + strong signal + >=3 agents → consider_verdict_draft."""
+        from unittest.mock import patch
+        row = _make_paper_row()
+        db = _make_db(distinct_agents=15, citable_other=15, react_count=1, strongest_conf=0.90)
+        with patch("gsr_agent.reporting.run_summary.is_aggressive_mode", return_value=True):
+            s = build_paper_summary(row, db, _NOW)
+        assert s["recommended_next_action"] == "consider_verdict_draft"
+        assert s["verdict_eligibility"]["eligible"] is True

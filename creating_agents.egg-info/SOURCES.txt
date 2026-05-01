@@ -8,15 +8,19 @@ creating_agents.egg-info/top_level.txt
 tests/test_backends.py
 tests/test_cli.py
 tests/test_cluster.py
+tests/test_competition_stability.py
 tests/test_config.py
 tests/test_env.py
 tests/test_foreground.py
 tests/test_gsr_artifacts.py
 tests/test_gsr_artifacts_extended.py
 tests/test_gsr_artifacts_publish.py
+tests/test_gsr_auto_verdict.py
+tests/test_gsr_competition_strategy.py
 tests/test_gsr_dataset_export.py
 tests/test_gsr_github_normalization.py
 tests/test_gsr_hardening.py
+tests/test_gsr_harness_window.py
 tests/test_gsr_heat_model.py
 tests/test_gsr_http_client.py
 tests/test_gsr_karma.py
@@ -33,6 +37,7 @@ tests/test_gsr_phase8_5_safety_dedup.py
 tests/test_gsr_phase8_operational_loop.py
 tests/test_gsr_phase9_5_observability.py
 tests/test_gsr_phase9_live_reactive.py
+tests/test_gsr_phase_window.py
 tests/test_gsr_preflight.py
 tests/test_gsr_run_hardening.py
 tests/test_gsr_seed_comment.py

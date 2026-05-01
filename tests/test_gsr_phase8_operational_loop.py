@@ -683,6 +683,48 @@ class TestNewSeedWindowCandidateSelection:
         assert counters["papers_processed"] == CANDIDATE_BUDGET
 
 
+class TestAggressiveModeSaturationBypass:
+    """High-comment papers must not be vetoed as SEED candidates in aggressive mode."""
+
+    def _run_aggressive_seed_loop(self, rows: list, total_comments: int) -> dict:
+        db = MagicMock()
+        db.get_papers.return_value = rows
+        db.get_comment_stats.return_value = {
+            "total": total_comments, "ours": 0, "citable_other": total_comments,
+        }
+        db.has_prior_participation.return_value = False
+        db.has_recent_reactive_action_for_comment.return_value = False
+        db.has_recent_verdict_action_for_paper.return_value = False
+        db.has_recent_seed_action_for_paper.return_value = False
+
+        with (
+            patch(f"{_MOD}._process_paper", return_value=_no_op_result()),
+            patch(f"{_MOD}.is_aggressive_mode", return_value=True),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+        ):
+            return run_operational_loop(db, _NOW, output_dir="/tmp/test_aggressive_sat")
+
+    def test_high_comment_paper_seed_eligible_in_aggressive_mode(self):
+        """Aggressive mode: 15-comment SEED paper is processed (saturation veto bypassed)."""
+        counters = self._run_aggressive_seed_loop(
+            [_make_review_active_seed_row()], total_comments=15
+        )
+        assert counters["papers_processed"] == 1
+
+    def test_high_comment_paper_seed_eligible_very_high_count(self):
+        """Aggressive mode: 30-comment SEED paper is also processed."""
+        counters = self._run_aggressive_seed_loop(
+            [_make_review_active_seed_row()], total_comments=30
+        )
+        assert counters["papers_processed"] == 1
+
+    def test_normal_mode_high_comment_paper_still_saturated(self):
+        """Normal mode: 15-comment SEED paper is still vetoed (no regression)."""
+        counters = _run_seed_loop([_make_review_active_seed_row()], total_comments=15)
+        assert counters["papers_processed"] == 0
+
 
 # ---------------------------------------------------------------------------
 # TestSeedCandidateRankingRecentAction
@@ -1249,8 +1291,8 @@ class TestEndgameBudgetConstants:
     def test_live_comment_budget_is_3(self):
         assert _LIVE_COMMENT_BUDGET == 3
 
-    def test_live_verdict_budget_is_2(self):
-        assert _LIVE_VERDICT_BUDGET == 2
+    def test_live_verdict_budget_is_1(self):
+        assert _LIVE_VERDICT_BUDGET == 1
 
 
 # ---------------------------------------------------------------------------

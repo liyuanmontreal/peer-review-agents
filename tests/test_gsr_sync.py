@@ -452,21 +452,22 @@ def test_citable_other_nonzero_after_sync_with_citable_api_data(tmp_path):
     db.upsert_paper(paper)
 
     now = datetime.now(timezone.utc)
-    citable_comment = Comment(
-        comment_id="c-cit", paper_id="p-001", author_agent_id="other-agent",
-        text="Citable comment.", created_at=now, is_citable=True,
+    # Both comments are from other agents — sync infers both as citable.
+    comment_a = Comment(
+        comment_id="c-001", paper_id="p-001", author_agent_id="other-agent",
+        text="Comment A.", created_at=now,
     )
-    non_citable = Comment(
-        comment_id="c-ncit", paper_id="p-001", author_agent_id="other-agent2",
-        text="Non-citable.", created_at=now, is_citable=False,
+    comment_b = Comment(
+        comment_id="c-002", paper_id="p-001", author_agent_id="other-agent2",
+        text="Comment B.", created_at=now,
     )
-    client = _make_client(comments=[citable_comment, non_citable])
+    client = _make_client(comments=[comment_a, comment_b])
 
     sync_paper_comments(client, db, "p-001", agent_id="our-agent")
 
     stats = db.get_comment_stats("p-001")
     assert stats["total"] == 2
-    assert stats["citable_other"] == 1
+    assert stats["citable_other"] == 2
     db.close()
 
 
@@ -494,4 +495,90 @@ def test_upsert_comment_refreshes_text_on_conflict(tmp_path):
         "SELECT text FROM koala_comments WHERE comment_id='c-001'"
     ).fetchone()
     assert row["text"] == "updated text"
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# is_citable inference during sync
+# ---------------------------------------------------------------------------
+
+def test_sync_marks_other_agent_comments_as_citable():
+    our_comment = _make_comment("c-001", author="our-agent")
+    other_comment = _make_comment("c-002", author="other-agent")
+    client = _make_client(comments=[our_comment, other_comment])
+    db = _make_db()
+
+    sync_paper_comments(client, db, "p-001", agent_id="our-agent")
+
+    upserted = {c.args[0].comment_id: c.args[0] for c in db.upsert_comment.call_args_list}
+    assert upserted["c-001"].is_citable is False
+    assert upserted["c-002"].is_citable is True
+
+
+def test_sync_excludes_ours_from_citable():
+    our = _make_comment("c-001", author="our-agent")
+    client = _make_client(comments=[our])
+    db = _make_db()
+
+    sync_paper_comments(client, db, "p-001", agent_id="our-agent")
+
+    upserted = db.upsert_comment.call_args_list[0].args[0]
+    assert upserted.is_citable is False
+
+
+def test_sync_citable_other_reflected_in_db(tmp_path):
+    from datetime import datetime, timezone
+    from gsr_agent.storage.db import KoalaDB
+    from gsr_agent.koala.models import Comment as _Comment
+
+    db = KoalaDB(str(tmp_path / "test.db"))
+
+    def _c(cid, author, is_ours=False):
+        c = _Comment(
+            comment_id=cid, paper_id="p-001", author_agent_id=author,
+            text="x", created_at=datetime.now(timezone.utc),
+            is_ours=is_ours,
+        )
+        c.is_citable = not is_ours and bool(author)
+        return c
+
+    db.upsert_comment(_c("c-001", "us", is_ours=True))
+    db.upsert_comment(_c("c-002", "agent-a"))
+    db.upsert_comment(_c("c-003", "agent-b"))
+
+    stats = db.get_comment_stats("p-001")
+    assert stats["total"] == 3
+    assert stats["ours"] == 1
+    assert stats["citable_other"] == 2
+    db.close()
+
+
+def test_high_comment_count_paper_not_cold_after_sync(tmp_path, monkeypatch):
+    """Paper with many other-agent comments is not cold_no_override after sync."""
+    import os
+    from datetime import datetime, timezone
+    from gsr_agent.storage.db import KoalaDB
+    from gsr_agent.koala.models import Comment as _Comment
+    monkeypatch.setenv("KOALA_AGENT_ID", "our-agent")
+    db = KoalaDB(str(tmp_path / "test.db"))
+
+    for i in range(15):
+        c = _Comment(
+            comment_id=f"c-{i:03d}", paper_id="p-001",
+            author_agent_id=f"agent-{i}", text="review text",
+            created_at=datetime.now(timezone.utc),
+            is_ours=False,
+        )
+        c.is_citable = True
+        db.upsert_comment(c)
+
+    stats = db.get_comment_stats("p-001")
+    assert stats["citable_other"] == 15
+
+    distinct_n = db.get_distinct_other_agent_count("p-001")
+    assert distinct_n == 15
+
+    from gsr_agent.strategy.heat import paper_heat_band
+    band = paper_heat_band(distinct_n)
+    assert band != "cold"
     db.close()

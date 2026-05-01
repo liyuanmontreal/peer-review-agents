@@ -798,3 +798,115 @@ def test_phase5a_stats_output_has_all_required_keys(db):
         "insufficient_count", "verification_error_count",
     }
     assert required.issubset(stats.keys())
+
+
+# ---------------------------------------------------------------------------
+# Section I: evidence-sparse aggressive-mode path
+# ---------------------------------------------------------------------------
+
+def test_evidence_sparse_normal_mode_still_unclear(monkeypatch):
+    """Normal mode (aggressive_mode=False): all insufficient_evidence → 'unclear', no draft."""
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy()],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: [_FAKE_INSUFFICIENT_VERIF.copy()],
+    )
+    result = analyze_reactive_opportunity_for_comment(
+        _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID
+    )
+    assert result.recommendation == "unclear"
+    assert result.draft_text is None
+
+
+def test_evidence_sparse_aggressive_returns_evidence_sparse(monkeypatch):
+    """Aggressive mode: all insufficient_evidence + claims → recommendation=evidence_sparse."""
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy()],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: [_FAKE_INSUFFICIENT_VERIF.copy()],
+    )
+    result = analyze_reactive_opportunity_for_comment(
+        _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID, aggressive_mode=True
+    )
+    assert result.recommendation == "evidence_sparse"
+    assert result.draft_text is not None
+    assert "[DRY-RUN" in result.draft_text
+
+
+def test_evidence_sparse_draft_contains_claim_text(monkeypatch):
+    """Evidence-sparse draft includes the extracted claim text."""
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy()],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: [_FAKE_INSUFFICIENT_VERIF.copy()],
+    )
+    result = analyze_reactive_opportunity_for_comment(
+        _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID, aggressive_mode=True
+    )
+    assert "95% accuracy" in result.draft_text
+
+
+def test_evidence_sparse_requires_all_insufficient(monkeypatch):
+    """If any verdict is not insufficient_evidence, do not produce evidence_sparse."""
+    claim2 = {**_FAKE_CLAIM.copy(), "id": "claim-002", "claim_text": "Another claim"}
+    mixed = [_FAKE_SUPPORTED_VERIF.copy(), _FAKE_INSUFFICIENT_VERIF.copy()]
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy(), claim2],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: mixed,
+    )
+    result = analyze_reactive_opportunity_for_comment(
+        _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID, aggressive_mode=True
+    )
+    assert result.recommendation == "unclear"
+    assert result.draft_text is None
+
+
+def test_evidence_sparse_multiple_claims_aggressive(monkeypatch):
+    """Multiple claims all returning insufficient_evidence → evidence_sparse in aggressive mode."""
+    claim2 = {**_FAKE_CLAIM.copy(), "id": "claim-002", "claim_text": "Another verifiable claim"}
+    insuff2 = {**_FAKE_INSUFFICIENT_VERIF.copy(), "id": "verif-002", "claim_id": "claim-002"}
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy(), claim2],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: [_FAKE_INSUFFICIENT_VERIF.copy(), insuff2],
+    )
+    result = analyze_reactive_opportunity_for_comment(
+        _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID, aggressive_mode=True
+    )
+    assert result.recommendation == "evidence_sparse"
+    assert result.draft_text is not None
+
+
+def test_evidence_sparse_logs_comment_decision(monkeypatch, caplog):
+    """[comment_decision] log is emitted for the evidence_sparse path."""
+    import logging
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.extract_claims_from_koala_comment",
+        lambda *a, **kw: [_FAKE_CLAIM.copy()],
+    )
+    monkeypatch.setattr(
+        "gsr_agent.commenting.reactive_analysis.retrieve_and_verify_claims",
+        lambda *a, **kw: [_FAKE_INSUFFICIENT_VERIF.copy()],
+    )
+    with caplog.at_level(logging.INFO, logger="gsr_agent.commenting.reactive_analysis"):
+        analyze_reactive_opportunity_for_comment(
+            _COMMENT_ID, _COMMENT_TEXT, _PAPER_ID, aggressive_mode=True
+        )
+    assert any("[comment_decision]" in r.message for r in caplog.records)
+    assert any("decision=post" in r.message for r in caplog.records)

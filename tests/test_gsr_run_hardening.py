@@ -106,6 +106,23 @@ class TestRunPreflightChecksDryRun:
         assert ok is True
         assert failures == []
 
+    def test_aggressive_mode_live_verdict_auto_without_paper_ids_passes(
+        self, tmp_path, monkeypatch
+    ):
+        for k, v in _FULL_LIVE_ENV.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.setenv("KOALA_AGGRESSIVE_FINAL_24H", "1")
+        db_path = str(tmp_path / "agent.db")
+        out_dir = str(tmp_path / "reports")
+        ok, failures = run_preflight_checks(
+            db_path, out_dir,
+            live_verdict=True,
+            live_verdict_auto=True,
+            paper_ids=None,
+        )
+        assert ok is True
+        assert failures == []
+
 
 class TestRunPreflightChecksLiveEnvGates:
 

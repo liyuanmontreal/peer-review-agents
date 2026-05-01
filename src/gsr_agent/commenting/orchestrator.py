@@ -35,7 +35,7 @@ from ..rules.karma import get_action_cost
 from ..rules.preflight import CommentPreflightInput, preflight_comment_action
 from ..rules.timeline import PaperPhase, get_paper_phase
 from ..strategy.opportunity_manager import PaperOpportunity, classify_paper_opportunity
-from .reactive_analysis import ReactiveAnalysisResult
+from .reactive_analysis import ReactiveAnalysisResult, _DRY_RUN_HEADER
 from .seed_comment import choose_best_seed_comment, generate_seed_comment_candidates, is_low_signal_abstract
 
 if TYPE_CHECKING:
@@ -239,9 +239,6 @@ def plan_and_post_seed_comment(
 # Phase 5B: reactive comment execution
 # ---------------------------------------------------------------------------
 
-_DRY_RUN_HEADER = "[DRY-RUN — not posted]"
-
-
 def _prepare_reactive_body(draft_text: Optional[str]) -> Optional[str]:
     """Strip the Phase 5A DRY-RUN header from draft_text for actual posting."""
     if not draft_text:
@@ -292,8 +289,8 @@ def plan_and_post_reactive_comment(
     body = _prepare_reactive_body(candidate.draft_text)
     if not body:
         log.info(
-            "[orchestrator] reactive: no postable draft text for comment=%s paper=%s",
-            candidate.comment_id, paper.paper_id,
+            "[comment_live_post] SKIP paper_id=%s source_comment_id=%s reason=no_draft_body",
+            paper.paper_id, candidate.comment_id,
         )
         return None
 
@@ -321,9 +318,8 @@ def plan_and_post_reactive_comment(
 
     if not test_mode and run_mode != "live":
         log.info(
-            "[orchestrator] dry_run: would post reactive comment for paper=%s "
-            "source_comment=%s run_mode=%r github_url=%s",
-            paper.paper_id, candidate.comment_id, run_mode, github_file_url,
+            "[comment_live_post] SKIP paper_id=%s source_comment_id=%s reason=dry_run_mode run_mode=%s",
+            paper.paper_id, candidate.comment_id, run_mode,
         )
         db.log_action(
             paper_id=paper.paper_id,
@@ -346,18 +342,38 @@ def plan_and_post_reactive_comment(
     if not test_mode:
         api_base_url = os.environ.get("KOALA_API_BASE_URL", "")
         if not api_base_url:
+            log.error(
+                "[comment_live_post] SKIP paper_id=%s source_comment_id=%s reason=missing_api_base_url",
+                paper.paper_id, candidate.comment_id,
+            )
             from ..koala.errors import KoalaPreflightError
             raise KoalaPreflightError(
                 "plan_and_post_reactive_comment: KOALA_API_BASE_URL must be set in live mode."
             )
         validate_artifact_for_live_action(github_file_url)
 
-    comment_id = client.post_comment(
-        paper.paper_id,
-        body,
-        github_file_url,
-        thread_id=candidate.thread_id,
-        parent_id=candidate.comment_id,
+    log.info(
+        "[comment_live_post] START paper_id=%s source_comment_id=%s path=reactive_short",
+        paper.paper_id, candidate.comment_id,
+    )
+    try:
+        comment_id = client.post_comment(
+            paper.paper_id,
+            body,
+            github_file_url,
+            thread_id=candidate.thread_id,
+            parent_id=candidate.comment_id,
+        )
+    except KoalaAPIError as exc:
+        log.error(
+            "[comment_live_post] FAIL paper_id=%s source_comment_id=%s error_type=%s error=%s",
+            paper.paper_id, candidate.comment_id, type(exc).__name__, exc,
+        )
+        raise
+
+    log.info(
+        "[comment_live_post] DONE paper_id=%s posted_comment_id=%s",
+        paper.paper_id, comment_id,
     )
 
     cost = get_action_cost("comment", has_prior_participation=has_participated)

@@ -200,6 +200,96 @@ def test_heat_saturated_strong_contradiction_overrides():
 
 
 # ---------------------------------------------------------------------------
+# B2. evidence_sparse fallback in aggressive mode
+# ---------------------------------------------------------------------------
+
+def _make_evidence_sparse_result(comment_id: str = _COMMENT_ID) -> ReactiveAnalysisResult:
+    return ReactiveAnalysisResult(
+        comment_id=comment_id,
+        paper_id=_PAPER_ID,
+        recommendation="evidence_sparse",
+        claims=[{"id": "c-1", "claim_text": "The model achieves 95% accuracy on MNIST"}],
+        verifications=[{
+            "id": "v-1", "claim_id": "c-1",
+            "verdict": "insufficient_evidence", "confidence": 0.0,
+        }],
+        draft_text=(
+            "[DRY-RUN — not posted]\n"
+            f"Claim review (evidence-sparse) for comment {comment_id}:\n\n"
+            "The following claims were identified in the reviewed comment but could not be "
+            "verified against the paper's evidence base. These points may warrant closer scrutiny:\n\n"
+            "- The model achieves 95% accuracy on MNIST\n"
+        ),
+    )
+
+
+def test_evidence_sparse_not_selected_in_normal_mode():
+    """Normal mode ignores evidence_sparse candidates."""
+    sparse = _make_evidence_sparse_result()
+    assert select_best_reactive_candidate([sparse], distinct_citable_other_agents=2) is None
+
+
+def test_evidence_sparse_selected_in_aggressive_mode():
+    """Aggressive mode picks evidence_sparse when no react candidate exists."""
+    sparse = _make_evidence_sparse_result()
+    selected = select_best_reactive_candidate(
+        [sparse], distinct_citable_other_agents=2, aggressive_mode=True
+    )
+    assert selected is sparse
+
+
+def test_evidence_sparse_not_selected_when_react_exists_in_normal():
+    """In normal mode, react candidate beats everything; evidence_sparse ignored."""
+    react = _make_react_result(confidence=0.8)
+    sparse = _make_evidence_sparse_result("c-sparse")
+    selected = select_best_reactive_candidate(
+        [react, sparse], distinct_citable_other_agents=2
+    )
+    assert selected is react
+
+
+def test_evidence_sparse_not_selected_when_react_exists_in_aggressive():
+    """In aggressive mode, react still beats evidence_sparse."""
+    react = _make_react_result(confidence=0.8)
+    sparse = _make_evidence_sparse_result("c-sparse")
+    selected = select_best_reactive_candidate(
+        [react, sparse], distinct_citable_other_agents=2, aggressive_mode=True
+    )
+    assert selected is react
+
+
+def test_evidence_sparse_fallback_when_react_suppressed_by_heat_in_aggressive():
+    """In aggressive mode, if react is suppressed by heat band, fall back to evidence_sparse."""
+    low_conf = _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE - 0.1
+    react = _make_react_result(confidence=low_conf)  # cold band will suppress this
+    sparse = _make_evidence_sparse_result("c-sparse")
+    selected = select_best_reactive_candidate(
+        [react, sparse], distinct_citable_other_agents=0, aggressive_mode=True
+    )
+    assert selected is sparse
+
+
+def test_evidence_sparse_fallback_when_react_suppressed_by_heat_in_normal_is_none():
+    """In normal mode, no fallback to evidence_sparse when react is suppressed."""
+    low_conf = _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE - 0.1
+    react = _make_react_result(confidence=low_conf)
+    sparse = _make_evidence_sparse_result("c-sparse")
+    selected = select_best_reactive_candidate(
+        [react, sparse], distinct_citable_other_agents=0, aggressive_mode=False
+    )
+    assert selected is None
+
+
+def test_evidence_sparse_no_fallback_when_no_react_in_normal():
+    """Normal mode with no react candidates → None even if evidence_sparse exists."""
+    skip = _make_skip_result()
+    sparse = _make_evidence_sparse_result("c-sparse")
+    assert select_best_reactive_candidate(
+        [skip, sparse], distinct_citable_other_agents=2
+    ) is None
+
+
+# ---------------------------------------------------------------------------
 # C. Posting — dry-run is the default
 # ---------------------------------------------------------------------------
 
@@ -331,6 +421,68 @@ def test_plan_and_post_reactive_passes_valid_github_url():
     github_url = call_args[2]
     assert github_url.startswith("https://github.com/")
     assert not github_url.startswith("TODO:")
+
+
+def test_comment_post_start_done_logs(caplog):
+    """[comment_live_post] START and DONE are logged when a comment is actually posted."""
+    import logging
+    paper = _make_paper()
+    candidate = _make_react_result()
+    client = _make_client()
+    db = _make_db()
+
+    with caplog.at_level(logging.INFO, logger="gsr_agent.commenting.orchestrator"):
+        plan_and_post_reactive_comment(
+            paper, candidate, client, db,
+            karma_remaining=50.0, now=_NOW_REVIEW,
+            test_mode=True,
+        )
+
+    messages = [r.message for r in caplog.records]
+    assert any("[comment_live_post] START" in m for m in messages)
+    assert any("[comment_live_post] DONE" in m for m in messages)
+
+
+def test_comment_post_fail_log_on_error(caplog):
+    """[comment_live_post] FAIL is logged and the exception is re-raised."""
+    import logging
+    from gsr_agent.koala.errors import KoalaAPIError
+    paper = _make_paper()
+    candidate = _make_react_result()
+    client = _make_client()
+    client.post_comment.side_effect = KoalaAPIError("500 server error")
+    db = _make_db()
+
+    with caplog.at_level(logging.ERROR, logger="gsr_agent.commenting.orchestrator"):
+        with pytest.raises(KoalaAPIError):
+            plan_and_post_reactive_comment(
+                paper, candidate, client, db,
+                karma_remaining=50.0, now=_NOW_REVIEW,
+                test_mode=True,
+            )
+
+    assert any("[comment_live_post] FAIL" in r.message for r in caplog.records)
+
+
+def test_evidence_sparse_comment_can_be_posted(caplog):
+    """An evidence_sparse candidate with draft text can be posted in test_mode."""
+    import logging
+    paper = _make_paper()
+    candidate = _make_evidence_sparse_result()
+    client = _make_client()
+    db = _make_db()
+
+    with caplog.at_level(logging.INFO, logger="gsr_agent.commenting.orchestrator"):
+        result = plan_and_post_reactive_comment(
+            paper, candidate, client, db,
+            karma_remaining=50.0, now=_NOW_REVIEW,
+            test_mode=True,
+        )
+
+    assert result == "reactive-comment-001"
+    assert client.post_comment.called
+    assert any("[comment_live_post] START" in r.message for r in caplog.records)
+    assert any("[comment_live_post] DONE" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

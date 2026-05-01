@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 
 _MIN_REACT_CONFIDENCE = 0.5
 
+_DRY_RUN_HEADER = "[DRY-RUN — not posted]"
+
 # Verdict values that are treated as "this claim is contradicted by the paper".
 # GSR currently produces "refuted" via VerificationResponse Literal.
 # "contradicted" and "contradiction" appear in historical GSR DB rows and in the
@@ -55,6 +57,7 @@ def analyze_reactive_opportunity_for_comment(
     *,
     db: Optional["KoalaDB"] = None,
     workspace: Optional[Path] = None,
+    aggressive_mode: bool = False,
 ) -> ReactiveAnalysisResult:
     """Extract and verify claims from a citable comment. Always dry-run.
 
@@ -62,13 +65,20 @@ def analyze_reactive_opportunity_for_comment(
       1. Extract challengeable claims from comment_text via GSR.
       2. Fast-reject with recommendation=skip when no claims are found.
       3. Verify each claim against paper_chunks evidence.
-      4. Compute recommendation: react | skip | unclear.
-      5. Build draft text when recommendation is react.
+      4. Compute recommendation: react | skip | unclear | evidence_sparse.
+         evidence_sparse is only produced when aggressive_mode=True and all
+         verifications returned insufficient_evidence.
+      5. Build draft text when recommendation is react or evidence_sparse.
       6. Persist results to db when db is provided.
     """
     claims = extract_claims_from_koala_comment(comment_text, paper_id, workspace)
 
     if not claims:
+        log.info(
+            "[comment_decision] paper_id=%s comment=%s path=reactive_short "
+            "decision=skip reason=no_claims_extracted",
+            paper_id, comment_id,
+        )
         result = ReactiveAnalysisResult(
             comment_id=comment_id,
             paper_id=paper_id,
@@ -89,9 +99,30 @@ def analyze_reactive_opportunity_for_comment(
 
     recommendation, skip_reason = _compute_recommendation(verifications)
 
+    # Aggressive mode: when all verifications lack evidence but claims exist,
+    # promote to evidence_sparse so the paper isn't silently dropped.
+    if (
+        aggressive_mode
+        and recommendation == "unclear"
+        and _all_insufficient_evidence(verifications)
+    ):
+        recommendation = "evidence_sparse"
+        skip_reason = None
+
+    log.info(
+        "[comment_decision] paper_id=%s comment=%s path=reactive_short "
+        "decision=%s reason=%s claim_count=%d verdict_counts=%s aggressive=%s",
+        paper_id, comment_id,
+        "post" if recommendation in ("react", "evidence_sparse") else "skip",
+        skip_reason or recommendation,
+        len(claims), _verdict_counts(verifications), aggressive_mode,
+    )
+
     draft_text: Optional[str] = None
     if recommendation == "react":
         draft_text = _build_draft_text(comment_id, claims, verifications)
+    elif recommendation == "evidence_sparse":
+        draft_text = _build_evidence_sparse_draft(comment_id, claims)
 
     result = ReactiveAnalysisResult(
         comment_id=comment_id,
@@ -114,6 +145,7 @@ def analyze_reactive_candidates_for_paper(
     db: "KoalaDB",
     *,
     workspace: Optional[Path] = None,
+    aggressive_mode: bool = False,
 ) -> List[ReactiveAnalysisResult]:
     """Run reactive analysis on every citable other-agent comment for a paper."""
     comments = db.get_citable_other_comments_for_paper(paper_id)
@@ -125,9 +157,12 @@ def analyze_reactive_candidates_for_paper(
             paper_id=paper_id,
             db=db,
             workspace=workspace,
+            aggressive_mode=aggressive_mode,
         )
         result.thread_id = comment.get("thread_id")
         results.append(result)
+        if aggressive_mode and result.recommendation in ("react", "evidence_sparse"):
+            break
     return results
 
 
@@ -154,6 +189,34 @@ def _compute_recommendation(verifications: List[dict]) -> tuple[str, Optional[st
     return "unclear", None
 
 
+def _all_insufficient_evidence(verifications: List[dict]) -> bool:
+    """Return True when every verification returned insufficient_evidence."""
+    return bool(verifications) and all(
+        v.get("verdict", "") == "insufficient_evidence" for v in verifications
+    )
+
+
+def _build_evidence_sparse_draft(
+    comment_id: str,
+    claims: List[dict],
+) -> str:
+    """Build a lightweight draft when claims exist but no paper evidence was retrieved."""
+    lines = [
+        _DRY_RUN_HEADER,
+        f"Claim review (evidence-sparse) for comment {comment_id}:",
+        "",
+        "The following claims were identified in the reviewed comment but could not be "
+        "verified against the paper's evidence base. These points may warrant closer scrutiny:",
+        "",
+    ]
+    for c in claims[:3]:
+        claim_text = c.get("claim_text", "")
+        if claim_text:
+            lines.append(f"- {claim_text}")
+    lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def _build_draft_text(
     comment_id: str,
     claims: List[dict],
@@ -166,7 +229,7 @@ def _build_draft_text(
         and float(v.get("confidence") or 0) >= _MIN_REACT_CONFIDENCE
     ]
     lines = [
-        "[DRY-RUN — not posted]",
+        _DRY_RUN_HEADER,
         f"Reactive fact-check draft for comment {comment_id}:",
         "",
     ]
@@ -218,6 +281,8 @@ def _max_contradiction_confidence(result: ReactiveAnalysisResult) -> float:
 def select_best_reactive_candidate(
     results: List[ReactiveAnalysisResult],
     distinct_citable_other_agents: int,
+    *,
+    aggressive_mode: bool = False,
 ) -> Optional[ReactiveAnalysisResult]:
     """Select the highest-value reactive candidate from Phase 5A outputs.
 
@@ -228,17 +293,27 @@ def select_best_reactive_candidate(
          cold/crowded/saturated return only when contradiction confidence
          >= _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE (soft penalty, not hard ban).
 
+    In aggressive_mode, falls back to evidence_sparse candidates when no react
+    candidate is available or when a react candidate is suppressed by heat band.
+
     Args:
         results:                       Phase 5A results for a single paper.
         distinct_citable_other_agents: other-agent citable comment count for
                                        the paper (heat-band input).
+        aggressive_mode:               when True, include evidence_sparse as fallback.
 
     Returns:
-        The best ReactiveAnalysisResult with recommendation "react", or None.
+        The best ReactiveAnalysisResult with recommendation "react" or
+        "evidence_sparse" (aggressive_mode only), or None.
     """
     react_candidates = [r for r in results if r.recommendation == "react"]
+    sparse_candidates = (
+        [r for r in results if r.recommendation == "evidence_sparse"]
+        if aggressive_mode else []
+    )
+
     if not react_candidates:
-        return None
+        return sparse_candidates[0] if sparse_candidates else None
 
     best = max(react_candidates, key=_max_contradiction_confidence)
     band = paper_heat_band(distinct_citable_other_agents)
@@ -250,13 +325,16 @@ def select_best_reactive_candidate(
     if _max_contradiction_confidence(best) >= _STRONG_CONTRADICTION_OVERRIDE_CONFIDENCE:
         return best
 
-    return None
+    # In aggressive mode, fall back to evidence_sparse when react is suppressed by heat
+    return sparse_candidates[0] if sparse_candidates else None
 
 
 def select_best_reactive_candidate_for_paper(
     paper_id: str,
     results: List[ReactiveAnalysisResult],
     db: "KoalaDB",
+    *,
+    aggressive_mode: bool = False,
 ) -> Optional[ReactiveAnalysisResult]:
     """Wrapper around select_best_reactive_candidate that reads crowding from DB.
 
@@ -265,15 +343,18 @@ def select_best_reactive_candidate_for_paper(
     select_best_reactive_candidate().
 
     Args:
-        paper_id: the paper to select for
-        results:  Phase 5A analysis results for the paper
-        db:       local SQLite state store
+        paper_id:       the paper to select for
+        results:        Phase 5A analysis results for the paper
+        db:             local SQLite state store
+        aggressive_mode: when True, include evidence_sparse candidates as fallback.
 
     Returns:
         The best ReactiveAnalysisResult, or None.
     """
     stats = db.get_comment_stats(paper_id)
-    return select_best_reactive_candidate(results, stats["citable_other"])
+    return select_best_reactive_candidate(
+        results, stats["citable_other"], aggressive_mode=aggressive_mode
+    )
 
 
 # ---------------------------------------------------------------------------

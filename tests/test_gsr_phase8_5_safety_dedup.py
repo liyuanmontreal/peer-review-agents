@@ -164,6 +164,24 @@ class TestHasRecentVerdictAction:
         _insert_action(db, "p1", "verdict_draft", _RECENT, status="failed")
         assert db.has_recent_verdict_action_for_paper("p1", _NOW) is False
 
+    def test_action_type_verdict_submission_matches(self, db):
+        _insert_action(db, "p1", "verdict_submission", _RECENT, status="success")
+        assert db.has_recent_verdict_action_for_paper(
+            "p1", _NOW, statuses=("success",), action_type="verdict_submission"
+        ) is True
+
+    def test_action_type_verdict_draft_does_not_match_submission(self, db):
+        _insert_action(db, "p1", "verdict_submission", _RECENT, status="success")
+        assert db.has_recent_verdict_action_for_paper(
+            "p1", _NOW, statuses=("success",), action_type="verdict_draft"
+        ) is False
+
+    def test_verdict_submission_success_does_not_match_dry_run_query(self, db):
+        _insert_action(db, "p1", "verdict_submission", _RECENT, status="success")
+        assert db.has_recent_verdict_action_for_paper(
+            "p1", _NOW, statuses=("dry_run",), action_type="verdict_submission"
+        ) is False
+
 
 # ---------------------------------------------------------------------------
 # TestProcessPaperDedup — _process_paper dedup gate behaviour
@@ -504,3 +522,131 @@ class TestSkippedCountUnderDedup:
         counters = self._run_with_result(result)
         assert counters["skipped"] == 0
         assert counters["verdict_drafts_created"] == 1
+
+
+# ---------------------------------------------------------------------------
+# TestAggressiveModeDedup — AGGRESSIVE_FINAL_24H: only live success blocks
+# ---------------------------------------------------------------------------
+
+def _make_aggressive_db(
+    *,
+    reactive_has_success: bool = False,
+    reactive_has_dry_run: bool = False,
+    verdict_has_live_submission: bool = False,
+    verdict_has_dry_run_draft: bool = False,
+) -> MagicMock:
+    """Build a mock DB whose dedup methods respond to the statuses/action_type kwargs."""
+    db = MagicMock()
+
+    def reactive_side_effect(paper_id, comment_id, now, *, statuses=("dry_run", "success"), **_):
+        if statuses == ("success",):
+            return reactive_has_success
+        if statuses == ("dry_run",):
+            return reactive_has_dry_run
+        return reactive_has_success or reactive_has_dry_run
+
+    def verdict_side_effect(paper_id, now, *, statuses=("dry_run", "success"), action_type="verdict_draft", **_):
+        if action_type == "verdict_submission" and statuses == ("success",):
+            return verdict_has_live_submission
+        if action_type == "verdict_draft" and statuses == ("dry_run",):
+            return verdict_has_dry_run_draft
+        return verdict_has_live_submission or verdict_has_dry_run_draft
+
+    db.has_recent_reactive_action_for_comment.side_effect = reactive_side_effect
+    db.has_recent_verdict_action_for_paper.side_effect = verdict_side_effect
+    return db
+
+
+class TestAggressiveModeDedup:
+    """In AGGRESSIVE_FINAL_24H mode, only a prior live success blocks; dry_run does not."""
+
+    def test_dry_run_reactive_does_not_block_live_reactive(self):
+        paper = _make_paper()
+        candidate = _make_candidate()
+        db = _make_aggressive_db(reactive_has_dry_run=True)
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="cmt-new") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, test_mode=True,
+                aggressive_mode=True,
+            )
+
+        mock_post.assert_called_once()
+        assert result["reactive_status"] != "dedup_skipped"
+
+    def test_dry_run_verdict_does_not_block_live_verdict(self):
+        paper = _make_paper()
+        db = _make_aggressive_db(verdict_has_dry_run_draft=True)
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(True)),
+            patch(f"{_MOD}.plan_verdict_for_paper", return_value={"artifact_url": "url/v.md"}),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, test_mode=True,
+                aggressive_mode=True,
+            )
+
+        assert result["verdict_status"] != "dedup_skipped"
+        assert result["verdict_draft_created"] is True
+
+    def test_failed_and_skipped_statuses_do_not_block(self):
+        """Statuses not in ('dry_run','success') never block (aggressive or normal)."""
+        paper = _make_paper()
+        candidate = _make_candidate()
+        db = _make_aggressive_db()  # reactive_has_success=False, reactive_has_dry_run=False
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="cmt-new") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, test_mode=True,
+                aggressive_mode=True,
+            )
+
+        mock_post.assert_called_once()
+        assert result["reactive_status"] != "dedup_skipped"
+
+    def test_live_reactive_success_blocks_in_aggressive_mode(self):
+        paper = _make_paper()
+        candidate = _make_candidate()
+        db = _make_aggressive_db(reactive_has_success=True)
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(False)),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, test_mode=True,
+                aggressive_mode=True,
+            )
+
+        mock_post.assert_not_called()
+        assert result["reactive_status"] == "dedup_skipped"
+        assert result["reactive_reason"] == "recent_reactive_action"
+
+    def test_live_verdict_submission_blocks_in_aggressive_mode(self):
+        paper = _make_paper()
+        db = _make_aggressive_db(verdict_has_live_submission=True)
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper", return_value=[]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper", return_value=None),
+            patch(f"{_MOD}.evaluate_verdict_eligibility", return_value=_make_eligibility(True)),
+            patch(f"{_MOD}.plan_verdict_for_paper") as mock_verdict,
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, test_mode=True,
+                aggressive_mode=True,
+            )
+
+        mock_verdict.assert_not_called()
+        assert result["verdict_status"] == "dedup_skipped"
+        assert result["verdict_reason"] == "recent_verdict_action"

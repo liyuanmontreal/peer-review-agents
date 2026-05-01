@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from gsr_agent.commenting.orchestrator import plan_and_post_reactive_comment
 from gsr_agent.commenting.reactive_analysis import ReactiveAnalysisResult
+from gsr_agent.koala.errors import KoalaAPIError, KoalaPreflightError
+from gsr_agent.koala.models import Paper
 from gsr_agent.orchestration.operational_loop import (
     _DryRunClient,
     _paper_from_row,
     _process_paper,
     run_operational_loop,
 )
+from gsr_agent.rules.timeline import compute_paper_windows
 from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
 
 _MOD = "gsr_agent.orchestration.operational_loop"
@@ -567,3 +571,416 @@ class TestRunOperationalLoopLiveReactive:
         }
         counters, _ = self._run_loop(process_results=[old_result])
         assert counters["live_reactive_posts"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestPreflightErrorInLivePath — KoalaPreflightError caught by live branch
+# ---------------------------------------------------------------------------
+
+class TestPreflightErrorInLivePath:
+    """KoalaPreflightError raised inside plan_and_post_reactive_comment must be
+    caught by the live_allowed branch and must not propagate or increment counters."""
+
+    def _run_live(self, exc):
+        paper = _make_paper()
+        db = _make_process_db()
+        live_client = MagicMock()
+
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper",
+                  return_value=[_make_candidate()]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper",
+                  return_value=_make_candidate()),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", side_effect=exc),
+            patch(f"{_MOD}.evaluate_verdict_eligibility",
+                  return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, False,
+                live_reactive=True,
+                live_budget_remaining=1,
+                live_client=live_client,
+            )
+        return result
+
+    def test_preflight_error_sets_preflight_failed_reason(self):
+        result = self._run_live(KoalaPreflightError("bad url"))
+        assert result["reactive_live_reason"] == "preflight_failed"
+
+    def test_preflight_error_does_not_set_live_posted(self):
+        result = self._run_live(KoalaPreflightError("bad url"))
+        assert result["reactive_live_posted"] is False
+
+    def test_preflight_error_sets_skipped_status(self):
+        result = self._run_live(KoalaPreflightError("bad url"))
+        assert result["reactive_status"] == "skipped"
+
+    def test_preflight_error_does_not_propagate(self):
+        """Must not raise — outer loop should never see this exception."""
+        try:
+            self._run_live(KoalaPreflightError("bad url"))
+        except KoalaPreflightError:
+            pytest.fail("KoalaPreflightError must be caught inside _process_paper")
+
+
+# ---------------------------------------------------------------------------
+# TestPlanAndPostReactiveCommentLivePath — orchestrator-level live post tests
+# ---------------------------------------------------------------------------
+
+_ORCH_MOD = "gsr_agent.commenting.orchestrator"
+_OPEN_TIME = datetime(2026, 4, 25, 0, 0, 0, tzinfo=timezone.utc)
+_NOW_COMMENT = datetime(2026, 4, 25, 12, 0, 0, tzinfo=timezone.utc)  # 12h → REVIEW_ACTIVE
+
+
+def _make_live_paper() -> Paper:
+    w = compute_paper_windows(_OPEN_TIME)
+    return Paper(
+        paper_id="paper-live-001",
+        title="Live Paper",
+        open_time=w.open_time,
+        review_end_time=w.review_end_time,
+        verdict_end_time=w.verdict_end_time,
+        state="REVIEW_ACTIVE",
+    )
+
+
+def _make_live_candidate() -> ReactiveAnalysisResult:
+    return ReactiveAnalysisResult(
+        comment_id="cmt-src-001",
+        paper_id="paper-live-001",
+        recommendation="react",
+        draft_text="[DRY-RUN — not posted]\nThis claim is refuted by evidence X.",
+    )
+
+
+def _make_live_client(comment_id: str = "posted-cmt-001") -> MagicMock:
+    client = MagicMock()
+    client.post_comment.return_value = comment_id
+    return client
+
+
+def _make_live_db() -> MagicMock:
+    db = MagicMock()
+    db.has_prior_participation.return_value = False
+    return db
+
+
+class TestPlanAndPostReactiveCommentLivePath:
+    """Direct tests of plan_and_post_reactive_comment for the live write path."""
+
+    def _run(self, *, run_mode="live", post_side_effect=None, post_return="posted-cmt-001",
+             artifact_url="https://github.com/org/repo/blob/main/comment.md",
+             moderation_raises=False):
+        paper = _make_live_paper()
+        candidate = _make_live_candidate()
+        client = _make_live_client(comment_id=post_return)
+        if post_side_effect is not None:
+            client.post_comment.side_effect = post_side_effect
+        db = _make_live_db()
+
+        with (
+            patch(f"{_ORCH_MOD}.get_run_mode", return_value=run_mode),
+            patch(f"{_ORCH_MOD}.publish_comment_artifact", return_value=artifact_url),
+            patch(f"{_ORCH_MOD}.preflight_comment_action",
+                  side_effect=KoalaPreflightError("moderation") if moderation_raises else None),
+            patch(f"{_ORCH_MOD}.validate_artifact_for_live_action"),
+            patch.dict("os.environ", {"KOALA_API_BASE_URL": "https://koala.example.com"}),
+        ):
+            result = plan_and_post_reactive_comment(
+                paper, candidate, client, db, karma_remaining=50.0,
+                now=_NOW_COMMENT, test_mode=False,
+            )
+        return result, client, db
+
+    def test_live_mode_calls_post_comment_once(self):
+        result, client, _ = self._run(run_mode="live")
+        assert result == "posted-cmt-001"
+        client.post_comment.assert_called_once()
+
+    def test_live_mode_post_comment_args(self):
+        _, client, _ = self._run(run_mode="live")
+        args, kwargs = client.post_comment.call_args
+        assert args[0] == "paper-live-001"
+        assert kwargs.get("parent_id") == "cmt-src-001"
+
+    def test_write_disabled_dry_run_mode_returns_none(self):
+        result, client, _ = self._run(run_mode="dry_run")
+        assert result is None
+        client.post_comment.assert_not_called()
+
+    def test_write_disabled_records_dry_run_to_db(self):
+        _, _, db = self._run(run_mode="dry_run")
+        db.log_action.assert_called_once()
+        _, kwargs = db.log_action.call_args
+        assert kwargs.get("status") == "dry_run"
+
+    def test_moderation_failure_raises_preflight_error(self):
+        paper = _make_live_paper()
+        candidate = _make_live_candidate()
+        client = _make_live_client()
+        db = _make_live_db()
+        with (
+            patch(f"{_ORCH_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_ORCH_MOD}.publish_comment_artifact",
+                  return_value="https://github.com/org/repo/blob/main/c.md"),
+            patch(f"{_ORCH_MOD}.preflight_comment_action",
+                  side_effect=KoalaPreflightError("moderation: blocked phrase")),
+            patch(f"{_ORCH_MOD}.validate_artifact_for_live_action"),
+            patch.dict("os.environ", {"KOALA_API_BASE_URL": "https://koala.example.com"}),
+        ):
+            with pytest.raises(KoalaPreflightError, match="moderation"):
+                plan_and_post_reactive_comment(
+                    paper, candidate, client, db, karma_remaining=50.0,
+                    now=_NOW_COMMENT, test_mode=False,
+                )
+        client.post_comment.assert_not_called()
+
+    def test_koala_api_error_reraises_does_not_record_success(self):
+        paper = _make_live_paper()
+        candidate = _make_live_candidate()
+        client = _make_live_client()
+        client.post_comment.side_effect = KoalaAPIError("500 internal server error")
+        db = _make_live_db()
+
+        with (
+            patch(f"{_ORCH_MOD}.get_run_mode", return_value="live"),
+            patch(f"{_ORCH_MOD}.publish_comment_artifact",
+                  return_value="https://github.com/org/repo/blob/main/c.md"),
+            patch(f"{_ORCH_MOD}.preflight_comment_action"),
+            patch(f"{_ORCH_MOD}.validate_artifact_for_live_action"),
+            patch.dict("os.environ", {"KOALA_API_BASE_URL": "https://koala.example.com"}),
+        ):
+            with pytest.raises(KoalaAPIError):
+                plan_and_post_reactive_comment(
+                    paper, candidate, client, db, karma_remaining=50.0,
+                    now=_NOW_COMMENT, test_mode=False,
+                )
+
+        client.post_comment.assert_called_once()
+        for c in db.log_action.call_args_list:
+            _, kwargs = c
+            assert kwargs.get("status") != "success", "must not record success on KoalaAPIError"
+
+    def test_success_records_action_with_success_status(self):
+        _, _, db = self._run(run_mode="live")
+        success_calls = [
+            c for c in db.log_action.call_args_list
+            if c[1].get("status") == "success"
+        ]
+        assert len(success_calls) == 1
+
+    def test_success_records_external_id(self):
+        _, _, db = self._run(run_mode="live", post_return="new-cmt-999")
+        success_call = next(
+            c for c in db.log_action.call_args_list if c[1].get("status") == "success"
+        )
+        assert success_call[1]["external_id"] == "new-cmt-999"
+
+    def test_success_records_source_comment_id_in_details(self):
+        _, _, db = self._run(run_mode="live")
+        success_call = next(
+            c for c in db.log_action.call_args_list if c[1].get("status") == "success"
+        )
+        assert success_call[1]["details"]["source_comment_id"] == "cmt-src-001"
+
+
+# ---------------------------------------------------------------------------
+# TestDedupPreventsRepeatPost — dedup gate blocks re-posting the same comment
+# ---------------------------------------------------------------------------
+
+class TestDedupPreventsRepeatPost:
+    """After a successful or dry_run action is recorded, the dedup gate must
+    block the same source comment from being retried."""
+
+    def test_dedup_gate_blocks_after_dry_run_recorded(self):
+        """_process_paper must skip when DB says recent action exists for the source comment."""
+        paper = _make_paper()
+        db = _make_process_db(reactive_dedup=True)
+        live_client = MagicMock()
+
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper",
+                  return_value=[_make_candidate()]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper",
+                  return_value=_make_candidate()),
+            patch(f"{_MOD}.plan_and_post_reactive_comment") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility",
+                  return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, False,
+                live_reactive=True,
+                live_budget_remaining=1,
+                live_client=live_client,
+            )
+
+        assert result["reactive_status"] == "dedup_skipped"
+        assert result["reactive_live_reason"] == "dedup_skipped"
+        assert result["reactive_live_posted"] is False
+        mock_post.assert_not_called()
+
+    def test_dedup_gate_not_blocking_on_first_run(self):
+        """Without a prior recorded action, the post should proceed."""
+        paper = _make_paper()
+        db = _make_process_db(reactive_dedup=False)
+        live_client = MagicMock()
+
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper",
+                  return_value=[_make_candidate()]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper",
+                  return_value=_make_candidate()),
+            patch(f"{_MOD}.plan_and_post_reactive_comment", return_value="cmt-new") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility",
+                  return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, False,
+                live_reactive=True,
+                live_budget_remaining=1,
+                live_client=live_client,
+            )
+
+        assert result["reactive_live_posted"] is True
+        mock_post.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestAggressiveModeReactiveHandoff — decision=post → plan_and_post called
+# ---------------------------------------------------------------------------
+
+def _make_sparse_candidate(paper_id: str = "paper-abc-123") -> ReactiveAnalysisResult:
+    return ReactiveAnalysisResult(
+        comment_id="cmt-other-sparse-001",
+        paper_id=paper_id,
+        recommendation="evidence_sparse",
+        verifications=[{"verdict": "insufficient_evidence", "confidence": 0.0}],
+        draft_text="[DRY-RUN — not posted]\nEvidence-sparse draft.",
+    )
+
+
+def _make_aggressive_process_db(*, reactive_dedup: bool = False, ours: int = 1) -> MagicMock:
+    db = MagicMock()
+    db.has_recent_reactive_action_for_comment.return_value = reactive_dedup
+    db.has_recent_verdict_action_for_paper.return_value = False
+    db.get_comment_stats.return_value = {"total": 5, "ours": ours, "citable_other": 3}
+    return db
+
+
+class TestAggressiveModeReactiveHandoff:
+    """Tests proving decision=post leads to plan_and_post_reactive_comment exactly once
+    in aggressive live mode, regardless of prior comments or contradiction confidence."""
+
+    def _run_aggressive(
+        self,
+        candidate,
+        *,
+        post_return: str = "cmt-agg-001",
+        reactive_dedup: bool = False,
+        ours: int = 1,
+        select_returns: object = "same",  # "same" → same as candidate; None → None
+    ):
+        """Run _process_paper with aggressive_mode=True and live gates open."""
+        paper = _make_paper()
+        db = _make_aggressive_process_db(reactive_dedup=reactive_dedup, ours=ours)
+        live_client = MagicMock()
+        selected = candidate if select_returns == "same" else select_returns
+
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper",
+                  return_value=[candidate] if candidate else []),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper",
+                  return_value=selected),
+            patch(f"{_MOD}.plan_and_post_reactive_comment",
+                  return_value=post_return) as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility",
+                  return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            result = _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, False,
+                live_reactive=True,
+                live_budget_remaining=3,
+                live_client=live_client,
+                aggressive_mode=True,
+            )
+        return result, mock_post
+
+    def test_evidence_sparse_calls_plan_and_post_exactly_once(self):
+        """evidence_sparse decision=post candidate in aggressive live mode → exactly one post."""
+        _, mock_post = self._run_aggressive(_make_sparse_candidate())
+        mock_post.assert_called_once()
+
+    def test_react_candidate_calls_plan_and_post_exactly_once(self):
+        """react decision=post candidate in aggressive live mode → exactly one post."""
+        _, mock_post = self._run_aggressive(_make_candidate())
+        mock_post.assert_called_once()
+
+    def test_evidence_sparse_with_prior_comment_still_posts(self):
+        """evidence_sparse candidate is not suppressed even when agent already commented."""
+        result, mock_post = self._run_aggressive(_make_sparse_candidate(), ours=2)
+        mock_post.assert_called_once()
+        assert result["reactive_live_posted"] is True
+
+    def test_evidence_sparse_live_posted_status(self):
+        result, _ = self._run_aggressive(_make_sparse_candidate())
+        assert result["reactive_live_posted"] is True
+        assert result["reactive_status"] == "live_posted"
+        assert result["reactive_live_reason"] == "live_posted"
+
+    def test_heat_band_suppressed_react_candidate_is_reselected(self):
+        """When select_best returns None (heat-band suppressed) but decision=post exists,
+        the candidate is re-selected from reactive_results."""
+        candidate = _make_candidate()
+        result, mock_post = self._run_aggressive(candidate, select_returns=None)
+        mock_post.assert_called_once()
+        assert result["reactive_live_posted"] is True
+
+    def test_no_post_candidates_skips_posting(self):
+        """When no decision=post candidate exists, plan_and_post must not be called."""
+        skip_result = ReactiveAnalysisResult(
+            comment_id="cmt-skip",
+            paper_id="paper-abc-123",
+            recommendation="skip",
+        )
+        result, mock_post = self._run_aggressive(skip_result, select_returns=None)
+        mock_post.assert_not_called()
+        assert result["reactive_live_posted"] is False
+
+    def test_dedup_still_blocks_in_aggressive_mode(self):
+        """Dedup gate must still prevent repeat posting even in aggressive mode."""
+        _, mock_post = self._run_aggressive(_make_sparse_candidate(), reactive_dedup=True)
+        mock_post.assert_not_called()
+
+    def test_plan_and_post_called_with_live_client_in_aggressive_mode(self):
+        """In aggressive live mode, plan_and_post must receive the live client."""
+        paper = _make_paper()
+        db = _make_aggressive_process_db()
+        live_client = MagicMock()
+        candidate = _make_sparse_candidate()
+
+        with (
+            patch(f"{_MOD}.analyze_reactive_candidates_for_paper",
+                  return_value=[candidate]),
+            patch(f"{_MOD}.select_best_reactive_candidate_for_paper",
+                  return_value=candidate),
+            patch(f"{_MOD}.plan_and_post_reactive_comment",
+                  return_value="cmt-agg") as mock_post,
+            patch(f"{_MOD}.evaluate_verdict_eligibility",
+                  return_value=_make_eligibility(False)),
+            patch(f"{_MOD}.get_run_mode", return_value="live"),
+        ):
+            _process_paper(
+                paper, _DryRunClient(), db, 100.0, _NOW, False,
+                live_reactive=True,
+                live_budget_remaining=3,
+                live_client=live_client,
+                aggressive_mode=True,
+            )
+
+        args, kwargs = mock_post.call_args
+        assert args[2] is live_client
+        assert kwargs.get("test_mode") is False

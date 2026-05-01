@@ -10,12 +10,14 @@ import pytest
 from gsr_agent.commenting.reactive_analysis import ReactiveAnalysisResult
 from gsr_agent.orchestration.operational_loop import (
     _DryRunClient,
+    _LIVE_VERDICT_BUDGET,
     _paper_from_row,
     _process_paper,
     _submit_live_verdict,
     run_operational_loop,
 )
 from gsr_agent.rules.verdict_assembly import VerdictEligibilityResult
+from gsr_agent.strategy.aggressive_mode import AGGRESSIVE_LIVE_VERDICT_BUDGET
 
 _MOD = "gsr_agent.orchestration.operational_loop"
 _NOW = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -550,7 +552,7 @@ class TestRunOperationalLoopLiveVerdict:
         assert counters["live_verdict_submissions"] == 1
 
     def test_budget_decrements_after_first_verdict(self):
-        """Second paper gets verdict_live_budget_remaining=1 after first submitted (budget=2)."""
+        """Second paper gets verdict_live_budget_remaining=0 after first submitted (budget=1)."""
         live_a = dict(_base_result("p-a"))
         live_a["verdict_live_submitted"] = True
         live_a["verdict_status"] = "live_submitted"
@@ -580,27 +582,24 @@ class TestRunOperationalLoopLiveVerdict:
                 live_verdict=True, test_mode=False, output_dir="/tmp/rep",
             )
 
-        # First paper: full verdict budget (2)
-        assert call_kwargs[0]["verdict_live_budget_remaining"] == 2
-        # Second paper: one slot used, one remaining
-        assert call_kwargs[1]["verdict_live_budget_remaining"] == 1
+        # First paper: full verdict budget (1)
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 1
+        # Second paper: budget exhausted after first submission
+        assert call_kwargs[1]["verdict_live_budget_remaining"] == 0
 
-    def test_max_two_live_verdicts_per_run(self):
-        """After two submitted verdicts, third paper gets verdict_live_budget_remaining=0."""
+    def test_max_one_live_verdict_per_run(self):
+        """After one submitted verdict, second paper gets verdict_live_budget_remaining=0."""
         result_a = dict(_base_result("p-a"))
         result_a["verdict_live_submitted"] = True
         result_b = dict(_base_result("p-b"))
-        result_b["verdict_live_submitted"] = True
-        result_c = dict(_base_result("p-c"))
-        result_c["verdict_live_submitted"] = False
+        result_b["verdict_live_submitted"] = False
 
-        rows = [_make_paper_row("p-a"), _make_paper_row("p-b"), _make_paper_row("p-c")]
+        rows = [_make_paper_row("p-a"), _make_paper_row("p-b")]
         call_kwargs = []
 
         def _side(paper, *a, **kw):
             call_kwargs.append(kw)
-            results = {"p-a": result_a, "p-b": result_b, "p-c": result_c}
-            return results[paper.paper_id]
+            return result_a if paper.paper_id == "p-a" else result_b
 
         db = _make_loop_db(rows)
         with (
@@ -613,14 +612,14 @@ class TestRunOperationalLoopLiveVerdict:
         ):
             counters = run_operational_loop(
                 db, _NOW,
-                paper_ids=["p-a", "p-b", "p-c"],
+                paper_ids=["p-a", "p-b"],
                 live_verdict=True, test_mode=False, output_dir="/tmp/rep",
             )
 
-        assert call_kwargs[0]["verdict_live_budget_remaining"] == 2
-        assert call_kwargs[1]["verdict_live_budget_remaining"] == 1
-        # Third paper: budget exhausted after two submissions
-        assert call_kwargs[2]["verdict_live_budget_remaining"] == 0
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 1
+        # Second paper: budget exhausted after one submission
+        assert call_kwargs[1]["verdict_live_budget_remaining"] == 0
+        assert counters["live_verdict_submissions"] == 1
 
     def test_allowlisted_true_when_paper_ids_provided(self):
         call_kwargs = []
@@ -750,3 +749,72 @@ class TestRunOperationalLoopLiveVerdict:
         )
         assert counters["live_reactive_posts"] == 1
         assert counters["live_verdict_submissions"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestVerdictBudgetModes — normal mode max 1 / aggressive mode max 15
+# ---------------------------------------------------------------------------
+
+def _make_submitting_side(n_papers: int):
+    """Returns a _process_paper side-effect that submits a verdict whenever budget > 0."""
+    paper_ids = [f"p-{i}" for i in range(n_papers)]
+
+    def _side(paper, *a, **kw):
+        r = dict(_base_result(paper.paper_id))
+        if kw.get("verdict_live_budget_remaining", 0) > 0:
+            r["verdict_live_submitted"] = True
+            r["verdict_status"] = "live_submitted"
+        return r
+
+    return paper_ids, _side
+
+
+class TestVerdictBudgetModes:
+    """Verify the verdict submission cap differs between normal and aggressive mode."""
+
+    def _run_budget_test(self, *, n_papers: int, aggressive: bool) -> tuple[dict, list]:
+        paper_ids, side_effect = _make_submitting_side(n_papers)
+        rows = [_make_paper_row(pid) for pid in paper_ids]
+        call_kwargs: list = []
+
+        original_side = side_effect
+
+        def _capturing_side(paper, *a, **kw):
+            call_kwargs.append(kw)
+            return original_side(paper, *a, **kw)
+
+        db = _make_loop_db(rows)
+        with (
+            patch(f"{_MOD}._process_paper", side_effect=_capturing_side),
+            patch(f"{_MOD}.is_aggressive_mode", return_value=aggressive),
+            patch(f"{_MOD}.build_run_summary", return_value=[]),
+            patch(f"{_MOD}.write_run_summary_markdown"),
+            patch(f"{_MOD}.write_run_summary_jsonl"),
+            patch("gsr_agent.koala.client.KoalaClient", return_value=MagicMock()),
+        ):
+            counters = run_operational_loop(
+                db, _NOW,
+                paper_ids=paper_ids,
+                live_verdict=True,
+                live_verdict_auto=False,
+                test_mode=False,
+                output_dir="/tmp/rep",
+            )
+        return counters, call_kwargs
+
+    def test_normal_mode_caps_at_one_verdict(self):
+        assert _LIVE_VERDICT_BUDGET == 1
+        counters, call_kwargs = self._run_budget_test(n_papers=5, aggressive=False)
+        assert counters["live_verdict_submissions"] == 1
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 1
+        for kw in call_kwargs[1:]:
+            assert kw["verdict_live_budget_remaining"] == 0
+
+    def test_aggressive_mode_caps_at_fifteen_verdicts(self):
+        assert AGGRESSIVE_LIVE_VERDICT_BUDGET == 15
+        n = 20
+        counters, call_kwargs = self._run_budget_test(n_papers=n, aggressive=True)
+        assert counters["live_verdict_submissions"] == 15
+        assert call_kwargs[0]["verdict_live_budget_remaining"] == 15
+        for kw in call_kwargs[15:]:
+            assert kw["verdict_live_budget_remaining"] == 0

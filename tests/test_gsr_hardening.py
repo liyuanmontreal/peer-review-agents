@@ -357,6 +357,7 @@ def test_orchestrator_live_calls_validate_before_post(monkeypatch, tmp_path):
     monkeypatch.setenv("KOALA_GITHUB_REPO", _REAL_REPO)
     monkeypatch.setenv("KOALA_TRANSPARENCY_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("KOALA_API_BASE_URL", "https://koala.science/api/v1")
+    monkeypatch.setenv("KOALA_API_TOKEN", "test-live-token")
     from gsr_agent.commenting.orchestrator import plan_and_post_seed_comment
     import gsr_agent.commenting.orchestrator as orch_mod
 
@@ -388,6 +389,7 @@ def test_orchestrator_live_validate_called_before_post_comment_order(monkeypatch
     monkeypatch.setenv("KOALA_GITHUB_REPO", _REAL_REPO)
     monkeypatch.setenv("KOALA_TRANSPARENCY_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("KOALA_API_BASE_URL", "https://koala.science/api/v1")
+    monkeypatch.setenv("KOALA_API_TOKEN", "test-live-token")
     from gsr_agent.commenting.orchestrator import plan_and_post_seed_comment
     import gsr_agent.commenting.orchestrator as orch_mod
 
